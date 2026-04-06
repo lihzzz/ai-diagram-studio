@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Diagram {
+  id             String             @id
+  title          String
+  type           String
+  elementsJson   String             @map("elements_json")
+  appStateJson   String?            @map("app_state_json")
+  currentVersion Int                @default(1) @map("current_version")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  isDeleted      Boolean            @default(false) @map("is_deleted")
+
+  revisions      DiagramRevision[]
+  generationJobs GenerationJob[]
+  exportJobs     ExportJob[]
+  chatSessions   ChatSession[]
+  changeSets     DiagramChangeSet[]
+
+  @@index([updatedAt(sort: Desc), isDeleted])
+  @@map("diagrams")
+}
+
+model DiagramRevision {
+  id           String   @id
+  diagramId    String   @map("diagram_id")
+  version      Int
+  elementsJson String   @map("elements_json")
+  appStateJson String?  @map("app_state_json")
+  note         String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  diagram Diagram @relation(fields: [diagramId], references: [id], onDelete: Cascade)
+
+  @@unique([diagramId, version])
+  @@index([diagramId, version(sort: Desc)])
+  @@map("diagram_revisions")
+}
+
+model GenerationJob {
+  id                   String   @id
+  diagramId            String?  @map("diagram_id")
+  jobType              String   @map("job_type")
+  status               String
+  inputText            String?  @map("input_text")
+  inputAssetId         String?  @map("input_asset_id")
+  inputType            String   @map("input_type")
+  irJson               String?  @map("ir_json")
+  resultElementsJson   String?  @map("result_elements_json")
+  reasoningSummaryJson String?  @map("reasoning_summary_json")
+  provider             String?
+  model                String?
+  errorMessage         String?  @map("error_message")
+  retryCount           Int      @default(0) @map("retry_count")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  diagram Diagram? @relation(fields: [diagramId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([jobType, provider, model])
+  @@map("generation_jobs")
+}
+
+model ExportJob {
+  id           String   @id
+  diagramId    String   @map("diagram_id")
+  format       String
+  status       String
+  filePath     String?  @map("file_path")
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  diagram Diagram @relation(fields: [diagramId], references: [id], onDelete: Cascade)
+
+  @@map("export_jobs")
+}
+
+model InputAsset {
+  id          String    @id
+  assetType   String    @map("asset_type")
+  filename    String
+  mimeType    String    @map("mime_type")
+  sizeBytes   Int       @map("size_bytes")
+  storagePath String    @map("storage_path")
+  metaJson    String?   @map("meta_json")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  docChunks   DocChunk[]
+
+  @@index([assetType, createdAt(sort: Desc)])
+  @@map("input_assets")
+}
+
+model DocChunk {
+  id         String @id
+  assetId    String @map("asset_id")
+  chunkIndex Int    @map("chunk_index")
+  content    String
+  title      String?
+  tokenCount Int    @map("token_count")
+
+  asset InputAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("doc_chunks")
+}
+
+model ChatSession {
+  id        String   @id
+  diagramId String   @map("diagram_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  diagram Diagram    @relation(fields: [diagramId], references: [id], onDelete: Cascade)
+  turns   ChatTurn[]
+
+  @@map("chat_sessions")
+}
+
+model ChatTurn {
+  id          String   @id
+  sessionId   String   @map("session_id")
+  role        String
+  content     String
+  changeSetId String?  @map("change_set_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("chat_turns")
+}
+
+model DiagramChangeSet {
+  id               String   @id
+  diagramId        String   @map("diagram_id")
+  beforeRevisionId String   @map("before_revision_id")
+  afterRevisionId  String   @map("after_revision_id")
+  opsJson          String   @map("ops_json")
+  summary          String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  diagram Diagram @relation(fields: [diagramId], references: [id], onDelete: Cascade)
+
+  @@index([diagramId, createdAt(sort: Desc)])
+  @@map("diagram_change_sets")
+}
+
+model Template {
+  id          String   @id
+  name        String
+  category    String
+  diagramType String   @map("diagram_type")
+  templateJson String  @map("template_json")
+  isBuiltin   Boolean  @default(true) @map("is_builtin")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([category, diagramType])
+  @@map("templates")
+}
+
+model Icon {
+  id       String  @id
+  name     String
+  category String
+  assetId  String? @map("asset_id")
+  source   String
+  tags     String?
+
+  @@index([category])
+  @@map("icons")
+}
+
+model ModelProfile {
+  id          String  @id
+  provider    String
+  model       String
+  apiBase     String? @map("api_base")
+  apiKey      String? @map("api_key")
+  qualityRank Int     @map("quality_rank")
+  isDefault   Boolean @default(false) @map("is_default")
+  enabled     Boolean @default(true)
+
+  @@map("model_profiles")
+}
+
+model AppSetting {
+  id                    Int      @id
+  defaultModelProfileId String?  @map("default_model_profile_id")
+  temperature           Float
+  maxTokens             Int      @map("max_tokens")
+  theme                 String?
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}

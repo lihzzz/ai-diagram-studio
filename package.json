@@ -1,0 +1,26 @@
+{
+  "name": "ai-diagram-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Diagram Studio v2.1 (single-user local edition)",
+  "workspaces": [
+    "apps/server",
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build",
+    "dev": "npm run dev:server & npm run dev:web",
+    "dev:server": "npm run -w apps/server dev",
+    "dev:web": "npm run -w apps/web dev",
+    "lint": "npm run --workspaces lint --if-present",
+    "test": "npm run --workspaces test --if-present",
+    "typecheck": "npm run --workspaces typecheck --if-present",
+    "db:generate": "npm run -w apps/server prisma:generate",
+    "db:migrate": "npm run -w apps/server prisma:migrate",
+    "db:seed": "npm run -w apps/server db:seed"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

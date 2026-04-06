@@ -1,0 +1,17 @@
+node_modules
+.DS_Store
+*.log
+.env
+.env.*
+/dist
+/apps/*/dist
+/packages/*/dist
+/apps/web/src/**/*.js
+/apps/web/vite.config.js
+/.turbo
+/.cache
+/data
+/exports
+/apps/server/dev.db
+/apps/server/dev.db-journal
+/apps/server/prisma/migrations
