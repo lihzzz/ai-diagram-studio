@@ -7,6 +7,13 @@ import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { asJsonString, safeJsonParse } from "../utils/json.js";
 import { createId } from "../utils/id.js";
+import { applyChangeSet } from "../domain/diff.js";
+import {
+  generateChangeSetFromInstruction,
+  generateElementsFromDocument,
+  generateElementsFromImageHint,
+  generateElementsFromText
+} from "../domain/mock-generation.js";
 import type { Message } from "./openai-compatible.js";
 import { requestJsonFromModel } from "./openai-compatible.js";
 
@@ -493,6 +500,87 @@ function userPromptForChat(instruction: string, current: DiagramElement[]): stri
   ].join("\n");
 }
 
+async function buildFallbackResult(params: {
+  job: {
+    id: string;
+    jobType: string;
+    inputType: string;
+    inputText: string | null;
+    inputAssetId: string | null;
+    diagramId: string | null;
+  };
+  meta: JobMeta;
+  reason: string;
+}): Promise<{
+  elements: DiagramElement[];
+  reasoning: Record<string, unknown>;
+} | null> {
+  const { job, meta, reason } = params;
+  let elements: DiagramElement[] | null = null;
+  let sourceRefs: string[] = ["fallback_mock"];
+  let fallbackSummary: string | undefined;
+
+  if (job.jobType === "text_generate") {
+    elements = generateElementsFromText(job.inputText ?? "", meta.diagramType);
+    sourceRefs = ["text_input", "fallback_mock"];
+  }
+
+  if (job.jobType === "doc_generate") {
+    const chunks = job.inputAssetId
+      ? await prisma.docChunk.findMany({
+          where: { assetId: job.inputAssetId },
+          orderBy: { chunkIndex: "asc" },
+          take: 16
+        })
+      : [];
+    const chunkTexts = chunks.map((item) => item.content);
+    elements = generateElementsFromDocument(chunkTexts.length > 0 ? chunkTexts : [job.inputText ?? ""], meta.diagramType);
+    sourceRefs = [job.inputAssetId ?? "document_input", "doc_chunks", "fallback_mock"];
+  }
+
+  if (job.jobType === "image_generate") {
+    const asset = job.inputAssetId ? await prisma.inputAsset.findUnique({ where: { id: job.inputAssetId } }) : null;
+    elements = generateElementsFromImageHint(asset?.filename ?? "image-input", meta.diagramType);
+    sourceRefs = [asset?.id ?? "image_input", "fallback_mock"];
+  }
+
+  if (job.jobType === "chat_edit") {
+    if (!job.diagramId) {
+      return null;
+    }
+    const diagram = await prisma.diagram.findUnique({ where: { id: job.diagramId } });
+    if (!diagram) {
+      return null;
+    }
+    const current = safeJsonParse<DiagramElement[]>(diagram.elementsJson, []);
+    const patch = generateChangeSetFromInstruction(current, meta.instruction ?? job.inputText ?? "", meta.selection ?? []);
+    elements = applyChangeSet(current, patch.ops);
+    fallbackSummary = patch.summary;
+    sourceRefs = [job.diagramId, "chat_instruction", "fallback_mock"];
+  }
+
+  if (!elements || elements.length === 0) {
+    return null;
+  }
+
+  const reasoning = fallbackReasoningSummary({
+    inputType: job.inputType,
+    diagramType: meta.diagramType,
+    sourceRefs,
+    modelReasoning: {
+      layeringReason: "模型调用失败，使用本地规则兜底生成",
+      keyDependencies: ["输入内容", "规则拆分", "自动连线"],
+      alternatives: ["稍后可重试在线模型", "可改为更短输入再生成"],
+      sources: sourceRefs,
+      fallback: true,
+      fallbackReason: reason,
+      fallbackSummary: fallbackSummary ?? null
+    }
+  });
+
+  return { elements, reasoning };
+}
+
 function messageWithImage(prompt: string, dataUrl: string): Array<Record<string, unknown>> {
   return [
     { type: "text", text: prompt },
@@ -655,6 +743,31 @@ async function runGenerationJob(jobId: string): Promise<void> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown worker error";
+    const meta = parseJobMeta(job.irJson);
+    const fallback = await buildFallbackResult({
+      job: {
+        id: job.id,
+        jobType: job.jobType,
+        inputType: job.inputType,
+        inputText: job.inputText,
+        inputAssetId: job.inputAssetId,
+        diagramId: job.diagramId
+      },
+      meta,
+      reason: message
+    });
+    if (fallback) {
+      await prisma.generationJob.update({
+        where: { id: job.id },
+        data: {
+          status: "succeeded",
+          resultElementsJson: asJsonString(fallback.elements),
+          reasoningSummaryJson: asJsonString(fallback.reasoning),
+          errorMessage: null
+        }
+      });
+      return;
+    }
 
     if (job.retryCount < 1) {
       await prisma.generationJob.update({

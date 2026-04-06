@@ -30,7 +30,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     pushHistory,
     undoLocal
   } = useEditorStore();
-  const { setRunning, setResult, activeJobId, previewElements, reasoningSummary, reset: resetJob } = useJobStore();
+  const { setRunning, setResult, activeJobId, previewElements, reasoningSummary, error: jobError, reset: resetJob } = useJobStore();
   const { addAsset, setChunks } = useAssetStore();
   const { sessionId, setSessionId, addTurn } = useChatStore();
   const { templates, icons, setTemplates, setIcons } = useCatalogStore();
@@ -99,6 +99,15 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
   const autoApplyGeneratedResult = async (jobId: string, diagramId: string) => {
     const result = await api.getGenerationJob(jobId);
     if (result.status !== "succeeded" || !result.result?.length) {
+      if (result.status === "succeeded" && (!result.result || result.result.length === 0)) {
+        setResult({
+          status: "failed",
+          progress: 100,
+          previewElements: null,
+          reasoningSummary: result.reasoningSummary,
+          error: "生成结果为空，请重试或简化输入描述"
+        });
+      }
       return;
     }
     try {
@@ -131,15 +140,26 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     if (!currentDiagram) {
       return;
     }
-    const diagramId = currentDiagram.id;
-    const { jobId } = await api.createGenerationJob({
-      ...body,
-      diagramId
-    });
-    setRunning(jobId);
-    const finalResult = await pollJob(jobId);
-    if (finalResult?.status === "succeeded") {
-      await autoApplyGeneratedResult(jobId, diagramId);
+    try {
+      const diagramId = currentDiagram.id;
+      const { jobId } = await api.createGenerationJob({
+        ...body,
+        diagramId
+      });
+      setRunning(jobId);
+      const finalResult = await pollJob(jobId);
+      if (finalResult?.status === "succeeded") {
+        await autoApplyGeneratedResult(jobId, diagramId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "生成失败";
+      setResult({
+        status: "failed",
+        progress: 100,
+        previewElements: null,
+        reasoningSummary: null,
+        error: message
+      });
     }
   };
 
@@ -323,6 +343,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
           ) : null}
         </div>
       </header>
+      {jobError ? <div className="error-banner">{jobError}</div> : null}
 
       <div className="editor-layout">
         <div className="left-column">
