@@ -65,7 +65,7 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell app-shell-list">
       {error ? <div className="error-banner">{error}</div> : null}
       <DiagramListPage diagrams={diagrams} onOpenDiagram={openDiagram} onCreateDiagram={createDiagram} />
       {currentDiagram ? (
