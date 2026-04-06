@@ -184,6 +184,164 @@ body {
   margin-bottom: 10px;
 }
 
+.model-settings-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.model-settings-action-card,
+.model-settings-cards-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.model-settings-action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.model-settings-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.model-settings-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.primary-btn.model-settings-trigger {
+  height: 38px;
+  min-width: 112px;
+  padding: 0 14px;
+}
+
+.model-settings-cards-header {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.model-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.model-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #f8faf7;
+}
+
+.model-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.model-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+}
+
+.chip-ok {
+  background: rgba(15, 123, 108, 0.1);
+  color: #136859;
+}
+
+.chip-off {
+  background: rgba(94, 111, 109, 0.14);
+  color: #465654;
+}
+
+.chip-default {
+  background: rgba(240, 111, 43, 0.14);
+  color: #8f3e11;
+}
+
+.model-card-meta {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.model-card-test {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #ffffff;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.model-card .row-actions {
+  flex-wrap: wrap;
+}
+
+.model-card .row-actions button {
+  white-space: nowrap;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(21, 37, 37, 0.4);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal-card {
+  width: min(540px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.modal-header h4 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.model-form-modal {
+  margin-bottom: 0;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -221,11 +379,14 @@ body {
 }
 
 .canvas {
-  min-height: 720px;
+  height: calc(100vh - 120px);
+  min-height: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 12px;
+  display: flex;
+  flex-direction: column;
 }
 
 .canvas-toolbar {
@@ -234,7 +395,8 @@ body {
 }
 
 .excalidraw-host {
-  height: 740px;
+  flex: 1;
+  min-height: 0;
   border: 1px dashed var(--line);
   border-radius: 10px;
   overflow: hidden;
@@ -291,6 +453,7 @@ body {
 .row-actions button,
 .list button,
 .floating-open,
+.modal-header button,
 .editor-header button,
 .create-row button,
 .followup-row button {
@@ -358,5 +521,22 @@ body {
 @media (max-width: 1200px) {
   .editor-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .model-settings-action-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .primary-btn.model-settings-trigger {
+    width: 100%;
+  }
+}
+
+@media (min-width: 980px) {
+  .model-settings-action-card {
+    align-items: flex-start;
   }
 }

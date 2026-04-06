@@ -147,8 +147,12 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
               }
             }}
             initialData={{
-              elements: []
+              elements: excalidrawElements as unknown as any[],
+              appState: {
+                theme: "dark"
+              }
             }}
+            theme="dark"
             viewModeEnabled={readOnly}
             onChange={(nextElements: readonly ExcalidrawElementLike[], appState: ExcalidrawAppStateLike) => {
               if (syncingSceneRef.current) {

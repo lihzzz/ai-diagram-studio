@@ -101,41 +101,24 @@ export function toExcalidrawElements(elements: DiagramElement[]): ExcalidrawScen
     const toWidth = to.width ?? DEFAULT_WIDTH;
     const toHeight = to.height ?? DEFAULT_HEIGHT;
 
-    // 计算从 from 中心到 to 中心的方向
+    // 使用中心点作为初始线段，让 Excalidraw 依据 start/end 自动计算真实附着点。
+    // 手动边界点对 rectangle 通常可行，但对 diamond 在部分方向会导致绑定丢失。
     const fromCenterX = from.x + fromWidth / 2;
     const fromCenterY = from.y + fromHeight / 2;
     const toCenterX = to.x + toWidth / 2;
     const toCenterY = to.y + toHeight / 2;
-    const dx = toCenterX - fromCenterX;
-    const dy = toCenterY - fromCenterY;
-
-    // 根据方向计算边界点（左出右进，或上下连接）
-    let x1: number, y1: number, x2: number, y2: number;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      // 水平方向为主：从右边界出，左边界进
-      x1 = dx > 0 ? from.x + fromWidth : from.x;
-      y1 = fromCenterY;
-      x2 = dx > 0 ? to.x : to.x + toWidth;
-      y2 = toCenterY;
-    } else {
-      // 垂直方向为主：从下边界出，上边界进
-      x1 = fromCenterX;
-      y1 = dy > 0 ? from.y + fromHeight : from.y;
-      x2 = toCenterX;
-      y2 = dy > 0 ? to.y : to.y + toHeight;
-    }
 
     const label = edgeLabelFromElement(edge);
     skeletons.push({
       id: edge.id,
       type: "arrow",
-      x: x1,
-      y: y1,
-      start: { id: from.id },
-      end: { id: to.id },
+      x: fromCenterX,
+      y: fromCenterY,
+      start: { id: from.id, type: normalizeShape(from.type) },
+      end: { id: to.id, type: normalizeShape(to.type) },
       points: [
         [0, 0],
-        [x2 - x1, y2 - y1]
+        [toCenterX - fromCenterX, toCenterY - fromCenterY]
       ],
       label: label ? { text: label } : undefined,
       strokeColor: "#1f6f66",
