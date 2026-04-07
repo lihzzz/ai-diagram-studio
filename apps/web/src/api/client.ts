@@ -59,27 +59,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ diagramId })
     }),
-  uploadAsset: async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    const response = await fetch(`${API_BASE}/api/assets/upload`, {
-      method: "POST",
-      body: formData
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.message ?? "upload failed");
-    }
-    return response.json() as Promise<{ id: string; assetType: string; filename: string }>;
-  },
-  parseAsset: (id: string) =>
-    request<{ ok: boolean; assetId: string; chunkCount?: number }>(`/api/assets/${id}/parse`, {
-      method: "POST"
-    }),
-  listAssetChunks: (id: string) =>
-    request<Array<{ id: string; chunkIndex: number; title: string | null; content: string; tokenCount: number }>>(
-      `/api/assets/${id}/chunks`
-    ),
   createChatSession: (diagramId: string) =>
     request<{ sessionId: string }>("/api/chat/sessions", {
       method: "POST",

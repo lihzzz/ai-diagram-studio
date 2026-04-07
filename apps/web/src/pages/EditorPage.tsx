@@ -6,7 +6,6 @@ import { DiagramCanvas } from "../components/DiagramCanvas";
 import { ModelSettingsPanel } from "../components/ModelSettingsPanel";
 import { ReasoningPanel } from "../components/ReasoningPanel";
 import { TemplateIconPanel } from "../components/TemplateIconPanel";
-import { useAssetStore } from "../stores/assetStore";
 import { useCatalogStore } from "../stores/catalogStore";
 import { useChatStore } from "../stores/chatStore";
 import { useEditorStore } from "../stores/editorStore";
@@ -31,7 +30,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     undoLocal
   } = useEditorStore();
   const { setRunning, setResult, activeJobId, previewElements, reasoningSummary, error: jobError, reset: resetJob } = useJobStore();
-  const { addAsset, setChunks } = useAssetStore();
   const { sessionId, setSessionId, addTurn } = useChatStore();
   const { templates, icons, setTemplates, setIcons } = useCatalogStore();
   const { profiles, setProfiles } = useModelStore();
@@ -168,32 +166,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
       mode: "text",
       diagramType,
       inputText
-    });
-  };
-
-  const handleRunImage = async (file: File, diagramType: "flowchart" | "module_architecture") => {
-    const asset = await api.uploadAsset(file);
-    addAsset(asset);
-    await api.parseAsset(asset.id);
-    await runGeneration({
-      mode: "image",
-      diagramType,
-      assetId: asset.id
-    });
-  };
-
-  const handleRunDocument = async (file: File, diagramType: "flowchart" | "module_architecture", parseFirst: boolean) => {
-    const asset = await api.uploadAsset(file);
-    addAsset(asset);
-    if (parseFirst) {
-      await api.parseAsset(asset.id);
-      const chunks = await api.listAssetChunks(asset.id);
-      setChunks(chunks);
-    }
-    await runGeneration({
-      mode: "document",
-      diagramType,
-      assetId: asset.id
     });
   };
 
@@ -347,7 +319,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
 
       <div className="editor-layout">
         <div className="left-column">
-          <AiPanel onRunText={handleRunText} onRunImage={handleRunImage} onRunDocument={handleRunDocument} onRunChat={handleRunChat} />
+          <AiPanel onRunText={handleRunText} onRunChat={handleRunChat} />
           <ReasoningPanel summary={reasoningSummary} onAskFollowup={handleRunChat} />
           <ModelSettingsPanel
             profiles={profiles}
@@ -362,6 +334,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
             elements={hasPreview ? (previewElements ?? []) : elements}
             selection={selection}
             readOnly={hasPreview}
+            diagramType={currentDiagram.type as "flowchart" | "module_architecture"}
             onSelect={(ids: string[]) => setSelection(ids)}
             onElementsChange={(nextElements) => {
               if (!hasPreview) {

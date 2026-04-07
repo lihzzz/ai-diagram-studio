@@ -2,22 +2,15 @@ import { useState } from "react";
 
 type AiPanelProps = {
   onRunText: (inputText: string, diagramType: "flowchart" | "module_architecture") => Promise<void>;
-  onRunImage: (file: File, diagramType: "flowchart" | "module_architecture") => Promise<void>;
-  onRunDocument: (
-    file: File,
-    diagramType: "flowchart" | "module_architecture",
-    parseFirst: boolean
-  ) => Promise<void>;
   onRunChat: (instruction: string) => Promise<void>;
 };
 
-const TABS = ["text", "image", "document", "chat"] as const;
+const TABS = ["text", "chat"] as const;
 
-export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiPanelProps) {
+export function AiPanel({ onRunText, onRunChat }: AiPanelProps) {
   const [tab, setTab] = useState<(typeof TABS)[number]>("text");
   const [inputText, setInputText] = useState("");
   const [diagramType, setDiagramType] = useState<"flowchart" | "module_architecture">("flowchart");
-  const [file, setFile] = useState<File | null>(null);
   const [chatInstruction, setChatInstruction] = useState("");
   const [running, setRunning] = useState(false);
 
@@ -29,12 +22,6 @@ export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiP
     try {
       if (tab === "text") {
         await onRunText(inputText, diagramType);
-      }
-      if (tab === "image" && file) {
-        await onRunImage(file, diagramType);
-      }
-      if (tab === "document" && file) {
-        await onRunDocument(file, diagramType, true);
       }
       if (tab === "chat") {
         await onRunChat(chatInstruction);
@@ -75,13 +62,6 @@ export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiP
           placeholder="输入流程描述或模块描述，每行一个步骤/模块"
           onChange={(event) => setInputText(event.target.value)}
         />
-      ) : null}
-
-      {tab === "image" || tab === "document" ? (
-        <label className="field-label">
-          上传文件
-          <input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-        </label>
       ) : null}
 
       {tab === "chat" ? (
