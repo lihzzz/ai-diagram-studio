@@ -8,11 +8,13 @@ type EditorState = {
   selection: string[];
   dirty: boolean;
   localHistory: DiagramElement[][];
+  canvasEngine: "excalidraw" | "reactflow";
   setDiagram: (diagram: DiagramRecord) => void;
   setElements: (elements: DiagramElement[]) => void;
   setSelection: (selection: string[]) => void;
   pushHistory: () => void;
   undoLocal: () => void;
+  setCanvasEngine: (engine: "excalidraw" | "reactflow") => void;
 };
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -21,6 +23,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selection: [],
   dirty: false,
   localHistory: [],
+  canvasEngine: "reactflow",
   setDiagram: (diagram) =>
     set({
       currentDiagram: diagram,
@@ -48,5 +51,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         elements: last,
         dirty: true
       };
-    })
+    }),
+  setCanvasEngine: (engine) => set({ canvasEngine: engine })
 }));

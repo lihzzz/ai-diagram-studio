@@ -1,8 +1,10 @@
 import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Excalidraw } from "@excalidraw/excalidraw";
 
+import { useEditorStore } from "../stores/editorStore";
 import type { DiagramElement } from "../types";
 import { fromExcalidrawElements, toExcalidrawElements } from "../utils/excalidraw-adapter";
+import { ReactFlowCanvas } from "./ReactFlowCanvas";
 
 type ExcalidrawElementLike = {
   id: string;
@@ -26,6 +28,7 @@ type DiagramCanvasProps = {
   elements: DiagramElement[];
   selection: string[];
   readOnly?: boolean;
+  diagramType?: "flowchart" | "module_architecture";
   onSelect: (ids: string[]) => void;
   onElementsChange?: (elements: DiagramElement[]) => void;
 };
@@ -78,7 +81,16 @@ function elementSignature(elements: DiagramElement[]): string {
   return JSON.stringify(normalized);
 }
 
-export function DiagramCanvas({ elements, selection, readOnly = false, onSelect, onElementsChange }: DiagramCanvasProps) {
+/**
+ * Excalidraw 画布组件（原 DiagramCanvas 逻辑）
+ */
+function ExcalidrawCanvas({
+  elements,
+  selection,
+  readOnly = false,
+  onSelect,
+  onElementsChange
+}: Omit<DiagramCanvasProps, "diagramType">) {
   const excalidrawElements = useMemo(() => toExcalidrawElements(elements), [elements]);
   const apiRef = useRef<ExcalidrawApiLike | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -194,7 +206,6 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
     return syncScene(excalidrawElements as unknown as readonly ExcalidrawElementLike[], incomingSignature);
   }, [excalidrawElements, incomingSignature]);
 
-  // 组件挂载时强制同步一次，处理重新挂载后数据已存在的情况
   useEffect(() => {
     if (!apiRef.current) {
       return;
@@ -223,7 +234,6 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
           <Excalidraw
             excalidrawAPI={(nextApi) => {
               apiRef.current = nextApi as unknown as ExcalidrawApiLike;
-              // 使用最新的 elements，而不是闭包中捕获的旧值
               const latestElements = incomingElementsRef.current;
               const initialElements = toExcalidrawElements(latestElements) as unknown as readonly ExcalidrawElementLike[];
               const signature = elementSignature(latestElements);
@@ -274,6 +284,61 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
           />
         </CanvasErrorBoundary>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 统一画布组件 - 根据 canvasEngine 选择渲染引擎
+ */
+export function DiagramCanvas({
+  elements,
+  selection,
+  readOnly = false,
+  diagramType = "flowchart",
+  onSelect,
+  onElementsChange
+}: DiagramCanvasProps) {
+  const canvasEngine = useEditorStore((state) => state.canvasEngine);
+  const setCanvasEngine = useEditorStore((state) => state.setCanvasEngine);
+
+  return (
+    <div className="canvas-wrapper">
+      <div className="engine-switcher">
+        <button
+          type="button"
+          className={canvasEngine === "reactflow" ? "active" : ""}
+          onClick={() => setCanvasEngine("reactflow")}
+        >
+          React Flow
+        </button>
+        <button
+          type="button"
+          className={canvasEngine === "excalidraw" ? "active" : ""}
+          onClick={() => setCanvasEngine("excalidraw")}
+        >
+          Excalidraw
+        </button>
+      </div>
+
+      {canvasEngine === "reactflow" ? (
+        <ReactFlowCanvas
+          elements={elements}
+          selection={selection}
+          readOnly={readOnly}
+          diagramType={diagramType}
+          onSelect={onSelect}
+          onElementsChange={onElementsChange}
+        />
+      ) : (
+        <ExcalidrawCanvas
+          elements={elements}
+          selection={selection}
+          readOnly={readOnly}
+          onSelect={onSelect}
+          onElementsChange={onElementsChange}
+        />
+      )}
     </div>
   );
 }
