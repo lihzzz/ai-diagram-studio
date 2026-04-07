@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect, useMemo, useRef } from "react";
+import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Excalidraw } from "@excalidraw/excalidraw";
 
 import type { DiagramElement } from "../types";
@@ -15,8 +15,11 @@ type ExcalidrawAppStateLike = {
 };
 
 type ExcalidrawApiLike = {
-  updateScene: (scene: { elements?: readonly ExcalidrawElementLike[] }) => void;
+  updateScene: (scene: { elements?: readonly ExcalidrawElementLike[]; appState?: ExcalidrawAppStateLike }) => void;
   scrollToContent?: (target?: readonly ExcalidrawElementLike[]) => void;
+  getAppState?: () => ExcalidrawAppStateLike;
+  getSceneElements?: () => readonly ExcalidrawElementLike[];
+  getSceneElementsIncludingDeleted?: () => readonly ExcalidrawElementLike[];
 };
 
 type DiagramCanvasProps = {
@@ -78,10 +81,12 @@ function elementSignature(elements: DiagramElement[]): string {
 export function DiagramCanvas({ elements, selection, readOnly = false, onSelect, onElementsChange }: DiagramCanvasProps) {
   const excalidrawElements = useMemo(() => toExcalidrawElements(elements), [elements]);
   const apiRef = useRef<ExcalidrawApiLike | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
   const syncingSceneRef = useRef(false);
   const lastAppliedSignatureRef = useRef<string>("");
   const selectionRef = useRef<string[]>([]);
   const incomingElementsRef = useRef(elements);
+  const [refreshingAnchors, setRefreshingAnchors] = useState(false);
   const incomingSignature = useMemo(() => elementSignature(elements), [elements]);
 
   useEffect(() => {
@@ -91,6 +96,79 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
   useEffect(() => {
     incomingElementsRef.current = elements;
   }, [elements]);
+
+  const refreshArrowAnchors = async () => {
+    if (readOnly || !onElementsChange || refreshingAnchors) {
+      return;
+    }
+    const api = apiRef.current;
+    if (!api) {
+      return;
+    }
+    const allSceneElements = (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements?.() ?? []).filter(
+      (item) => !item.isDeleted
+    );
+    const movableIds = allSceneElements
+      .filter((item) => item.type !== "arrow" && item.type !== "text")
+      .map((item) => item.id);
+    if (movableIds.length === 0) {
+      return;
+    }
+
+    const container = hostRef.current?.querySelector(".excalidraw") as HTMLElement | null;
+    if (!container) {
+      return;
+    }
+
+    setRefreshingAnchors(true);
+    syncingSceneRef.current = true;
+    try {
+      const previousSelected = Object.entries(api.getAppState?.().selectedElementIds ?? {})
+        .filter(([, checked]) => checked)
+        .map(([id]) => id)
+        .sort((a, b) => a.localeCompare(b));
+
+      const allSelectedMap: Record<string, boolean> = {};
+      for (const id of movableIds) {
+        allSelectedMap[id] = true;
+      }
+      api.updateScene({ appState: { selectedElementIds: allSelectedMap } });
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+
+      const keyboardTarget = (hostRef.current?.querySelector(".excalidraw") as HTMLElement | null) ?? container;
+      keyboardTarget.focus();
+      const fireKey = (key: string) => {
+        keyboardTarget.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        keyboardTarget.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+        document.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+      };
+
+      fireKey("ArrowRight");
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+      fireKey("ArrowLeft");
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+
+      const restoreSelectedMap: Record<string, boolean> = {};
+      for (const id of previousSelected) {
+        restoreSelectedMap[id] = true;
+      }
+      api.updateScene({ appState: { selectedElementIds: restoreSelectedMap } });
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+
+      const latestSceneElements = api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements?.() ?? [];
+      const normalized = fromExcalidrawElements(latestSceneElements as unknown as readonly unknown[]);
+      const nextSignature = elementSignature(normalized);
+      lastAppliedSignatureRef.current = nextSignature;
+      selectionRef.current = previousSelected;
+      onSelect(previousSelected);
+      onElementsChange(normalized);
+    } finally {
+      window.setTimeout(() => {
+        syncingSceneRef.current = false;
+        setRefreshingAnchors(false);
+      }, 0);
+    }
+  };
 
   const syncScene = (nextElements: readonly ExcalidrawElementLike[], signature: string) => {
     if (!apiRef.current) {
@@ -132,8 +210,15 @@ export function DiagramCanvas({ elements, selection, readOnly = false, onSelect,
 
   return (
     <div className="canvas">
-      <div className="canvas-toolbar">Canvas (Excalidraw)</div>
-      <div className="excalidraw-host">
+      <div className="canvas-toolbar">
+        <span>Canvas (Excalidraw)</span>
+        {!readOnly && onElementsChange ? (
+          <button type="button" onClick={() => void refreshArrowAnchors()} disabled={refreshingAnchors}>
+            {refreshingAnchors ? "刷新中..." : "刷新箭头锚点"}
+          </button>
+        ) : null}
+      </div>
+      <div className="excalidraw-host" ref={hostRef}>
         <CanvasErrorBoundary>
           <Excalidraw
             excalidrawAPI={(nextApi) => {

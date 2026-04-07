@@ -398,6 +398,25 @@ body {
 .canvas-toolbar {
   margin-bottom: 12px;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.canvas-toolbar button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  height: 30px;
+  padding: 0 10px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.canvas-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .excalidraw-host {

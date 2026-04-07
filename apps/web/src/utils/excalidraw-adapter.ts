@@ -58,6 +58,28 @@ function edgeLabelFromElement(edge: DiagramElement): string | undefined {
   return raw ? raw : undefined;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function readArrowPointsMeta(value: unknown): Array<[number, number]> | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+  const parsed: Array<[number, number]> = [];
+  for (const point of value) {
+    if (!Array.isArray(point) || point.length < 2) {
+      return null;
+    }
+    const [x, y] = point;
+    if (!isFiniteNumber(x) || !isFiniteNumber(y)) {
+      return null;
+    }
+    parsed.push([x, y]);
+  }
+  return parsed;
+}
+
 export function toExcalidrawElements(elements: DiagramElement[]): ExcalidrawSceneElement[] {
   const nodes = elements.filter((item) => item.type !== "arrow");
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
@@ -107,19 +129,33 @@ export function toExcalidrawElements(elements: DiagramElement[]): ExcalidrawScen
     const fromCenterY = from.y + fromHeight / 2;
     const toCenterX = to.x + toWidth / 2;
     const toCenterY = to.y + toHeight / 2;
+    const pointsFromMeta = readArrowPointsMeta(edge.meta?.points);
+    const dxFromMeta = isFiniteNumber(edge.meta?.dx) ? edge.meta.dx : null;
+    const dyFromMeta = isFiniteNumber(edge.meta?.dy) ? edge.meta.dy : null;
+    const hasSavedGeometry = Boolean(pointsFromMeta || (dxFromMeta !== null && dyFromMeta !== null));
+    const arrowX = hasSavedGeometry && isFiniteNumber(edge.x) ? edge.x : fromCenterX;
+    const arrowY = hasSavedGeometry && isFiniteNumber(edge.y) ? edge.y : fromCenterY;
+    const points: Array<[number, number]> = pointsFromMeta
+      ? pointsFromMeta
+      : dxFromMeta !== null && dyFromMeta !== null
+        ? [
+            [0, 0],
+            [dxFromMeta, dyFromMeta]
+          ]
+        : [
+            [0, 0],
+            [toCenterX - fromCenterX, toCenterY - fromCenterY]
+          ];
 
     const label = edgeLabelFromElement(edge);
     skeletons.push({
       id: edge.id,
       type: "arrow",
-      x: fromCenterX,
-      y: fromCenterY,
+      x: arrowX,
+      y: arrowY,
       start: { id: from.id, type: normalizeShape(from.type) },
       end: { id: to.id, type: normalizeShape(to.type) },
-      points: [
-        [0, 0],
-        [toCenterX - fromCenterX, toCenterY - fromCenterY]
-      ],
+      points,
       label: label ? { text: label } : undefined,
       strokeColor: "#1f6f66",
       roundness: null,
@@ -181,7 +217,8 @@ export function fromExcalidrawElements(rawElements: readonly unknown[]): Diagram
         toId: toId || null,
         label: label ?? null,
         dx: last[0],
-        dy: last[1]
+        dy: last[1],
+        points: points.map(([px, py]) => [px, py])
       }
     });
   }
