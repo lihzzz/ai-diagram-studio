@@ -20,7 +20,6 @@ model Diagram {
 
   revisions      DiagramRevision[]
   generationJobs GenerationJob[]
-  exportJobs     ExportJob[]
   chatSessions   ChatSession[]
   changeSets     DiagramChangeSet[]
 
@@ -50,7 +49,6 @@ model GenerationJob {
   jobType              String   @map("job_type")
   status               String
   inputText            String?  @map("input_text")
-  inputAssetId         String?  @map("input_asset_id")
   inputType            String   @map("input_type")
   irJson               String?  @map("ir_json")
   resultElementsJson   String?  @map("result_elements_json")
@@ -67,49 +65,6 @@ model GenerationJob {
   @@index([status, createdAt(sort: Desc)])
   @@index([jobType, provider, model])
   @@map("generation_jobs")
-}
-
-model ExportJob {
-  id           String   @id
-  diagramId    String   @map("diagram_id")
-  format       String
-  status       String
-  filePath     String?  @map("file_path")
-  errorMessage String?  @map("error_message")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  diagram Diagram @relation(fields: [diagramId], references: [id], onDelete: Cascade)
-
-  @@map("export_jobs")
-}
-
-model InputAsset {
-  id          String    @id
-  assetType   String    @map("asset_type")
-  filename    String
-  mimeType    String    @map("mime_type")
-  sizeBytes   Int       @map("size_bytes")
-  storagePath String    @map("storage_path")
-  metaJson    String?   @map("meta_json")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  docChunks   DocChunk[]
-
-  @@index([assetType, createdAt(sort: Desc)])
-  @@map("input_assets")
-}
-
-model DocChunk {
-  id         String @id
-  assetId    String @map("asset_id")
-  chunkIndex Int    @map("chunk_index")
-  content    String
-  title      String?
-  tokenCount Int    @map("token_count")
-
-  asset InputAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
-
-  @@map("doc_chunks")
 }
 
 model ChatSession {
@@ -170,7 +125,6 @@ model Icon {
   id       String  @id
   name     String
   category String
-  assetId  String? @map("asset_id")
   source   String
   tags     String?
 

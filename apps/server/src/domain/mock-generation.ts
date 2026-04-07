@@ -122,36 +122,6 @@ export function generateElementsFromText(inputText: string, diagramType: Diagram
   return [...nodes, ...edges];
 }
 
-export function generateElementsFromDocument(chunks: string[], diagramType: DiagramType): DiagramElement[] {
-  const topChunks = chunks.slice(0, 8);
-  const normalized = topChunks.map((chunk) => chunk.slice(0, 50).replace(/\s+/g, " ").trim());
-  return generateElementsFromText(normalized.join("\n"), diagramType);
-}
-
-export function generateElementsFromImageHint(filename: string, diagramType: DiagramType): DiagramElement[] {
-  const hints = [
-    `Extracted from ${filename}`,
-    "Detected container",
-    "Detected service",
-    "Detected dependency"
-  ];
-  const elements = generateElementsFromText(hints.join("\n"), diagramType);
-  return elements.map((element) => {
-    if (element.type !== "rectangle") {
-      return element;
-    }
-
-    return {
-      ...element,
-      meta: {
-        ...(element.meta ?? {}),
-        confidence: Math.random() < 0.35 ? 0.42 : 0.89,
-        source: "image_ocr"
-      }
-    };
-  });
-}
-
 export function generateChangeSetFromInstruction(
   input: DiagramElement[],
   instruction: string,

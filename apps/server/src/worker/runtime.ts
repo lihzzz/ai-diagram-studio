@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 
 import type { DiagramElement, DiagramType } from "../types/domain.js";
 
@@ -10,8 +9,6 @@ import { createId } from "../utils/id.js";
 import { applyChangeSet } from "../domain/diff.js";
 import {
   generateChangeSetFromInstruction,
-  generateElementsFromDocument,
-  generateElementsFromImageHint,
   generateElementsFromText
 } from "../domain/mock-generation.js";
 import type { Message } from "./openai-compatible.js";
@@ -46,7 +43,7 @@ type GraphPayload = {
 };
 
 async function ensureDirs(): Promise<void> {
-  await fs.mkdir(config.assetStorageDir, { recursive: true });
+  await fs.mkdir(config.iconStorageDir, { recursive: true });
   await fs.mkdir(config.exportOutputDir, { recursive: true });
 }
 
@@ -320,14 +317,6 @@ function userPromptForText(inputText: string): string {
   ].join("\n");
 }
 
-function userPromptForDocument(documentText: string): string {
-  return [
-    "Generate a diagram from this document content:",
-    documentText,
-    "Extract key stages/modules and dependencies."
-  ].join("\n");
-}
-
 function userPromptForChat(instruction: string, current: DiagramElement[]): string {
   return [
     "Apply this incremental edit instruction and return full updated graph JSON.",
@@ -344,7 +333,6 @@ async function buildFallbackResult(params: {
     jobType: string;
     inputType: string;
     inputText: string | null;
-    inputAssetId: string | null;
     diagramId: string | null;
   };
   meta: JobMeta;
@@ -361,25 +349,6 @@ async function buildFallbackResult(params: {
   if (job.jobType === "text_generate") {
     elements = generateElementsFromText(job.inputText ?? "", meta.diagramType);
     sourceRefs = ["text_input", "fallback_mock"];
-  }
-
-  if (job.jobType === "doc_generate") {
-    const chunks = job.inputAssetId
-      ? await prisma.docChunk.findMany({
-          where: { assetId: job.inputAssetId },
-          orderBy: { chunkIndex: "asc" },
-          take: 16
-        })
-      : [];
-    const chunkTexts = chunks.map((item) => item.content);
-    elements = generateElementsFromDocument(chunkTexts.length > 0 ? chunkTexts : [job.inputText ?? ""], meta.diagramType);
-    sourceRefs = [job.inputAssetId ?? "document_input", "doc_chunks", "fallback_mock"];
-  }
-
-  if (job.jobType === "image_generate") {
-    const asset = job.inputAssetId ? await prisma.inputAsset.findUnique({ where: { id: job.inputAssetId } }) : null;
-    elements = generateElementsFromImageHint(asset?.filename ?? "image-input", meta.diagramType);
-    sourceRefs = [asset?.id ?? "image_input", "fallback_mock"];
   }
 
   if (job.jobType === "chat_edit") {
@@ -419,13 +388,6 @@ async function buildFallbackResult(params: {
   return { elements, reasoning };
 }
 
-function messageWithImage(prompt: string, dataUrl: string): Array<Record<string, unknown>> {
-  return [
-    { type: "text", text: prompt },
-    { type: "image_url", image_url: { url: dataUrl } }
-  ];
-}
-
 async function resolveModelProfile(job: {
   provider: string | null;
   model: string | null;
@@ -461,12 +423,6 @@ async function resolveModelProfile(job: {
   throw new Error("no_available_model_profile");
 }
 
-async function loadImageAsDataUrl(assetPath: string, mimeType: string): Promise<string> {
-  const file = await fs.readFile(assetPath);
-  const base64 = file.toString("base64");
-  return `data:${mimeType};base64,${base64}`;
-}
-
 async function runGenerationJob(jobId: string): Promise<void> {
   const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
   if (!job || job.status !== "pending") {
@@ -496,39 +452,6 @@ async function runGenerationJob(jobId: string): Promise<void> {
     if (job.jobType === "text_generate") {
       messages.push({ role: "user", content: userPromptForText(job.inputText ?? "") });
       sourceRefs = ["text_input"];
-    }
-
-    if (job.jobType === "doc_generate") {
-      if (!job.inputAssetId) {
-        throw new Error("doc_generate job missing inputAssetId");
-      }
-      const chunks = await prisma.docChunk.findMany({
-        where: { assetId: job.inputAssetId },
-        orderBy: { chunkIndex: "asc" },
-        take: 16
-      });
-      const text = chunks.map((item) => item.content).join("\n\n");
-      messages.push({ role: "user", content: userPromptForDocument(text || (job.inputText ?? "")) });
-      sourceRefs = [job.inputAssetId, "doc_chunks"];
-    }
-
-    if (job.jobType === "image_generate") {
-      if (!job.inputAssetId) {
-        throw new Error("image_generate job missing inputAssetId");
-      }
-      const asset = await prisma.inputAsset.findUnique({ where: { id: job.inputAssetId } });
-      if (!asset) {
-        throw new Error("image asset not found");
-      }
-      const dataUrl = await loadImageAsDataUrl(asset.storagePath, asset.mimeType);
-      messages.push({
-        role: "user",
-        content: messageWithImage(
-          "Recognize this diagram image and convert it into editable nodes and directed edges.",
-          dataUrl
-        )
-      });
-      sourceRefs = [asset.id, "image_input"];
     }
 
     if (job.jobType === "chat_edit") {
@@ -588,7 +511,6 @@ async function runGenerationJob(jobId: string): Promise<void> {
         jobType: job.jobType,
         inputType: job.inputType,
         inputText: job.inputText,
-        inputAssetId: job.inputAssetId,
         diagramId: job.diagramId
       },
       meta,
@@ -630,56 +552,6 @@ async function runGenerationJob(jobId: string): Promise<void> {
   }
 }
 
-async function runExportJob(jobId: string): Promise<void> {
-  const job = await prisma.exportJob.findUnique({ where: { id: jobId } });
-  if (!job || job.status !== "pending") {
-    return;
-  }
-
-  await prisma.exportJob.update({
-    where: { id: job.id },
-    data: { status: "running", errorMessage: null }
-  });
-
-  try {
-    await ensureDirs();
-    const diagram = await prisma.diagram.findUnique({ where: { id: job.diagramId } });
-    if (!diagram) {
-      throw new Error("diagram not found");
-    }
-
-    const outputName = `${job.diagramId}-${Date.now()}.${job.format}`;
-    const filePath = path.join(config.exportOutputDir, outputName);
-    const payload = {
-      format: job.format,
-      title: diagram.title,
-      generatedAt: new Date().toISOString(),
-      elements: safeJsonParse<DiagramElement[]>(diagram.elementsJson, [])
-    };
-
-    if (job.format === "svg") {
-      const svg = `<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1280\" height=\"720\"><text x=\"20\" y=\"40\">${diagram.title}</text></svg>`;
-      await fs.writeFile(filePath, svg, "utf8");
-    } else {
-      await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
-    }
-
-    await prisma.exportJob.update({
-      where: { id: job.id },
-      data: { status: "succeeded", filePath }
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "export failed";
-    await prisma.exportJob.update({
-      where: { id: job.id },
-      data: {
-        status: "failed",
-        errorMessage: message
-      }
-    });
-  }
-}
-
 export async function initRuntime(): Promise<void> {
   await ensureDirs();
 }
@@ -687,11 +559,5 @@ export async function initRuntime(): Promise<void> {
 export function queueGenerationJob(jobId: string, delayMs = 100): void {
   setTimeout(() => {
     void runGenerationJob(jobId);
-  }, delayMs);
-}
-
-export function queueExportJob(jobId: string, delayMs = 100): void {
-  setTimeout(() => {
-    void runExportJob(jobId);
   }, delayMs);
 }

@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { FastifyInstance } from "fastify";
-import type { MultipartFile } from "@fastify/multipart";
 import {
   applyGenerationJobSchema,
   createChatSessionSchema,
@@ -21,29 +19,14 @@ import { config } from "../config.js";
 import { createId } from "../utils/id.js";
 import { asJsonString, safeJsonParse } from "../utils/json.js";
 import { HttpError } from "../utils/http-error.js";
-import { initRuntime, queueExportJob, queueGenerationJob } from "../worker/runtime.js";
+import { initRuntime, queueGenerationJob } from "../worker/runtime.js";
 
-const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
-const DOC_MIMES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/x-markdown",
-  "application/json",
-  "application/octet-stream"
-]);
 const ICON_MIMES = new Set(["image/png", "image/svg+xml", "image/webp", "image/jpeg", "image/jpg"]);
 const LEGACY_BUILTIN_MODEL_IDS = ["profile_openai_quality", "profile_anthropic_backup"];
 
-function mapModeToJobType(mode: "text" | "image" | "document" | "chat"): string {
+function mapModeToJobType(mode: "text" | "chat"): string {
   if (mode === "text") {
     return "text_generate";
-  }
-  if (mode === "image") {
-    return "image_generate";
-  }
-  if (mode === "document") {
-    return "doc_generate";
   }
   return "chat_edit";
 }
@@ -250,64 +233,10 @@ async function checkModelProfileConnection(profile: {
   }
 }
 
-function splitTextToChunks(content: string): Array<{ title: string | null; content: string }> {
-  const normalized = content.replace(/\r/g, "\n");
-  const blocks = normalized
-    .split(/\n(?=#|\d+\.)/g)
-    .map((block) => block.trim())
-    .filter(Boolean);
-  const fallback = blocks.length > 0 ? blocks : [normalized];
-
-  return fallback.map((block) => {
-    const lines = block.split("\n").filter(Boolean);
-    const first = lines[0] ?? "";
-    const title = /^#/.test(first) ? first.replace(/^#+/, "").trim() : null;
-    return {
-      title,
-      content: block
-    };
-  });
-}
-
 function enforce(condition: unknown, statusCode: number, message: string): asserts condition {
   if (!condition) {
     throw new HttpError(statusCode, message);
   }
-}
-
-async function storeAssetFile(part: MultipartFile): Promise<{
-  filePath: string;
-  sizeBytes: number;
-}> {
-  await fs.mkdir(config.assetStorageDir, { recursive: true });
-  const buffer = await part.toBuffer();
-  const safeName = part.filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
-  const filePath = path.join(config.assetStorageDir, `${Date.now()}-${safeName}`);
-  await fs.writeFile(filePath, buffer);
-  return { filePath, sizeBytes: buffer.byteLength };
-}
-
-async function waitForExportResult(jobId: string, timeoutMs = 8000): Promise<{
-  status: string;
-  filePath: string | null;
-}> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const job = await prisma.exportJob.findUnique({ where: { id: jobId } });
-    if (!job) {
-      break;
-    }
-    if (job.status === "succeeded") {
-      return { status: "succeeded", filePath: job.filePath };
-    }
-    if (job.status === "failed") {
-      throw new HttpError(500, job.errorMessage ?? "export failed");
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 120);
-    });
-  }
-  throw new HttpError(500, "export timeout");
 }
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -421,9 +350,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (payload.mode === "text") {
       enforce(payload.inputText, 400, "inputText is required in text mode");
     }
-    if (payload.mode === "image" || payload.mode === "document") {
-      enforce(payload.assetId, 400, "assetId is required in image/document mode");
-    }
     if (payload.mode === "chat") {
       enforce(payload.diagramId, 400, "diagramId is required in chat mode");
       enforce(payload.instruction || payload.inputText, 400, "instruction is required in chat mode");
@@ -445,10 +371,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       data: {
         id: jobId,
         diagramId: payload.diagramId ?? null,
-        jobType: mapModeToJobType(payload.mode),
+        jobType: mapModeToJobType(payload.mode as "text" | "chat"),
         status: "pending",
         inputText: payload.instruction ?? payload.inputText ?? null,
-        inputAssetId: payload.assetId ?? null,
+        inputAssetId: null,
         inputType: payload.mode,
         irJson: asJsonString({
           diagramType: payload.diagramType,
@@ -501,131 +427,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       changeSetId: "",
       newVersion: diagram.currentVersion
     };
-  });
-
-  app.post("/api/assets/upload", async (request) => {
-    const file = await request.file();
-    enforce(file, 400, "missing file");
-    const { filePath, sizeBytes } = await storeAssetFile(file);
-
-    const mime = file.mimetype.toLowerCase();
-    let assetType: "image" | "document" = "document";
-
-    if (IMAGE_MIMES.has(mime)) {
-      assetType = "image";
-      enforce(sizeBytes <= config.imageMaxFileMb * 1024 * 1024, 413, "image file too large");
-    } else if (DOC_MIMES.has(mime)) {
-      enforce(sizeBytes <= config.docMaxFileMb * 1024 * 1024, 413, "document file too large");
-    } else {
-      throw new HttpError(415, "unsupported file type");
-    }
-
-    const asset = await prisma.inputAsset.create({
-      data: {
-        id: createId("asset"),
-        assetType,
-        filename: file.filename,
-        mimeType: mime,
-        sizeBytes,
-        storagePath: filePath,
-        metaJson: asJsonString({ parsed: false })
-      }
-    });
-
-    return {
-      id: asset.id,
-      assetType: asset.assetType,
-      filename: asset.filename,
-      mimeType: asset.mimeType,
-      sizeBytes: asset.sizeBytes
-    };
-  });
-
-  app.get<{ Params: { id: string } }>("/api/assets/:id", async (request) => {
-    const asset = await prisma.inputAsset.findUnique({ where: { id: request.params.id } });
-    enforce(asset, 404, "asset not found");
-    return {
-      id: asset.id,
-      assetType: asset.assetType,
-      filename: asset.filename,
-      mimeType: asset.mimeType,
-      sizeBytes: asset.sizeBytes,
-      meta: safeJsonParse<Record<string, unknown> | null>(asset.metaJson, null)
-    };
-  });
-
-  app.post<{ Params: { id: string } }>("/api/assets/:id/parse", async (request) => {
-    const asset = await prisma.inputAsset.findUnique({ where: { id: request.params.id } });
-    enforce(asset, 404, "asset not found");
-
-    if (asset.assetType === "document") {
-      let text = "";
-      try {
-        text = await fs.readFile(asset.storagePath, "utf8");
-      } catch {
-        text = "";
-      }
-      if (!text.trim()) {
-        text = `Document placeholder parse for ${asset.filename}`;
-      }
-
-      const chunks = splitTextToChunks(text);
-      await prisma.$transaction(async (tx) => {
-        await tx.docChunk.deleteMany({ where: { assetId: asset.id } });
-        let index = 0;
-        for (const chunk of chunks) {
-          await tx.docChunk.create({
-            data: {
-              id: createId("chunk"),
-              assetId: asset.id,
-              chunkIndex: index,
-              content: chunk.content,
-              title: chunk.title,
-              tokenCount: Math.ceil(chunk.content.length / 4)
-            }
-          });
-          index += 1;
-        }
-        await tx.inputAsset.update({
-          where: { id: asset.id },
-          data: {
-            metaJson: asJsonString({
-              parsed: true,
-              parsedAt: new Date().toISOString(),
-              chunkCount: chunks.length
-            })
-          }
-        });
-      });
-
-      return { ok: true, assetId: asset.id, chunkCount: chunks.length };
-    }
-
-    await prisma.inputAsset.update({
-      where: { id: asset.id },
-      data: {
-        metaJson: asJsonString({
-          parsed: true,
-          parser: "mock_ocr",
-          lowConfidenceCount: 1
-        })
-      }
-    });
-    return { ok: true, assetId: asset.id };
-  });
-
-  app.get<{ Params: { id: string } }>("/api/assets/:id/chunks", async (request) => {
-    const chunks = await prisma.docChunk.findMany({
-      where: { assetId: request.params.id },
-      orderBy: { chunkIndex: "asc" }
-    });
-    return chunks.map((item) => ({
-      id: item.id,
-      chunkIndex: item.chunkIndex,
-      title: item.title,
-      content: item.content,
-      tokenCount: item.tokenCount
-    }));
   });
 
   app.post("/api/chat/sessions", async (request) => {
@@ -784,26 +585,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const file = await request.file();
     enforce(file, 400, "missing file");
     enforce(ICON_MIMES.has(file.mimetype.toLowerCase()), 415, "unsupported icon type");
-    const { filePath, sizeBytes } = await storeAssetFile(file);
 
-    const asset = await prisma.inputAsset.create({
-      data: {
-        id: createId("asset"),
-        assetType: "icon",
-        filename: file.filename,
-        mimeType: file.mimetype.toLowerCase(),
-        sizeBytes,
-        storagePath: filePath,
-        metaJson: asJsonString({ uploadedAt: new Date().toISOString() })
-      }
-    });
+    // 直接保存图标文件到 iconStorageDir
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(config.iconStorageDir, { recursive: true });
+    const buffer = await file.toBuffer();
+    const safeName = file.filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const filePath = path.join(config.iconStorageDir, `${Date.now()}-${safeName}`);
+    await writeFile(filePath, buffer);
 
     const icon = await prisma.icon.create({
       data: {
         id: createId("icon"),
         name: file.filename,
         category: "custom",
-        assetId: asset.id,
         source: "custom",
         tags: "custom,upload"
       }
@@ -914,57 +709,5 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       });
     });
     return { ok: true, defaultModelProfileId: profile.id };
-  });
-
-  app.post<{ Params: { id: string } }>("/api/diagrams/:id/export", async (request) => {
-    const body = request.body as { format?: string };
-    const format = body.format ?? "png";
-    enforce(["png", "svg", "pdf"].includes(format), 400, "invalid export format");
-    const diagram = await prisma.diagram.findUnique({ where: { id: request.params.id } });
-    enforce(diagram, 404, "diagram not found");
-
-    const jobId = createId("export");
-    await prisma.exportJob.create({
-      data: {
-        id: jobId,
-        diagramId: diagram.id,
-        format,
-        status: "pending"
-      }
-    });
-    queueExportJob(jobId, 0);
-    const result = await waitForExportResult(jobId);
-    return { ok: true, filePath: result.filePath };
-  });
-
-  app.post("/api/export-jobs", async (request) => {
-    const body = request.body as { diagramId?: string; format?: string };
-    enforce(body.diagramId, 400, "diagramId is required");
-    const format = body.format ?? "png";
-    enforce(["png", "svg", "pdf"].includes(format), 400, "invalid export format");
-    const diagram = await prisma.diagram.findUnique({ where: { id: body.diagramId } });
-    enforce(diagram, 404, "diagram not found");
-
-    const job = await prisma.exportJob.create({
-      data: {
-        id: createId("export"),
-        diagramId: diagram.id,
-        format,
-        status: "pending"
-      }
-    });
-    queueExportJob(job.id);
-    return { jobId: job.id };
-  });
-
-  app.get<{ Params: { jobId: string } }>("/api/export-jobs/:jobId", async (request) => {
-    const job = await prisma.exportJob.findUnique({ where: { id: request.params.jobId } });
-    enforce(job, 404, "export job not found");
-    return {
-      jobId: job.id,
-      status: job.status,
-      filePath: job.filePath,
-      error: job.errorMessage
-    };
   });
 }

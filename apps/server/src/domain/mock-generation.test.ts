@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   generateChangeSetFromInstruction,
-  generateElementsFromDocument,
-  generateElementsFromImageHint,
   generateElementsFromText
 } from "./mock-generation.js";
 
@@ -26,16 +24,6 @@ describe("mock generation", () => {
     const nodeTexts = elements.filter((item) => item.type === "rectangle").map((item) => item.text ?? "");
     expect(nodeTexts.some((text) => text.includes("Module:"))).toBe(true);
     expect(nodeTexts.length).toBeGreaterThanOrEqual(4);
-  });
-
-  it("should generate from document chunks", () => {
-    const elements = generateElementsFromDocument(["模块A职责", "模块B依赖A"], "module_architecture");
-    expect(elements.some((item) => item.type === "arrow")).toBe(true);
-  });
-
-  it("should mark confidence metadata in image mode", () => {
-    const elements = generateElementsFromImageHint("sample.png", "flowchart");
-    expect(elements.some((item) => item.meta?.source === "image_ocr")).toBe(true);
   });
 
   it("should output ops for chat instruction", () => {
