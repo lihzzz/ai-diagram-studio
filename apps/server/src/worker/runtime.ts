@@ -52,9 +52,8 @@ async function ensureDirs(): Promise<void> {
 
 function parseJobMeta(raw: string | null): JobMeta {
   const parsed = safeJsonParse<Record<string, unknown>>(raw, {});
-  const diagramType = parsed.diagramType === "module_architecture" ? "module_architecture" : "flowchart";
   return {
-    diagramType,
+    diagramType: "flowchart",
     instruction: typeof parsed.instruction === "string" ? parsed.instruction : undefined,
     selection: Array.isArray(parsed.selection)
       ? parsed.selection.filter((item): item is string => typeof item === "string")
@@ -224,7 +223,7 @@ function graphToElements(graph: GraphPayload, diagramType: DiagramType): Diagram
   }
   const nodeElements = graph.nodes.map((node) => {
     const pos = positions.get(node.id) ?? { x: 120, y: 100 };
-    const kind = diagramType === "module_architecture" ? "process" : node.kind ?? "process";
+    const kind = node.kind ?? "process";
     const shapeType = kind === "decision" ? "diamond" : kind === "start_end" ? "ellipse" : "rectangle";
     const width = kind === "decision" ? 260 : 240;
     const height = kind === "decision" ? 140 : kind === "start_end" ? 92 : 100;
@@ -235,7 +234,7 @@ function graphToElements(graph: GraphPayload, diagramType: DiagramType): Diagram
       y: pos.y,
       width,
       height,
-      text: diagramType === "module_architecture" ? `Module: ${node.title}` : node.title,
+      text: node.title,
       meta: { kind }
     };
   });
@@ -271,7 +270,7 @@ function fallbackReasoningSummary(params: {
     };
   }
   return {
-    layeringReason: params.diagramType === "module_architecture" ? "按职责与依赖分层" : "按业务顺序编排",
+    layeringReason: "按业务顺序编排",
     keyDependencies: ["上游输入", "核心处理", "下游输出"],
     alternatives: ["可拆分子流程", "可增加异常分支"],
     sources: params.sourceRefs,

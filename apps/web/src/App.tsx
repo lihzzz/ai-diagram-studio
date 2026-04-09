@@ -4,7 +4,7 @@ import { api } from "./api/client";
 import { EditorPage } from "./pages/EditorPage";
 import { DiagramListPage } from "./pages/DiagramListPage";
 import { useEditorStore } from "./stores/editorStore";
-import type { DiagramRecord } from "./types";
+import type { DiagramEngineType, DiagramRecord } from "./types";
 
 export function App() {
   const { setDiagram, currentDiagram } = useEditorStore();
@@ -39,8 +39,8 @@ export function App() {
     }
   };
 
-  const createDiagram = async (title: string, type: "flowchart" | "module_architecture") => {
-    const created = await api.createDiagram({ title, type });
+  const createDiagram = async (title: string, engineType: DiagramEngineType) => {
+    const created = await api.createDiagram({ title, type: "flowchart", engineType });
     await loadDiagrams();
     setDiagram(created);
     setPage("editor");

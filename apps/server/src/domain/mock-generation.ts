@@ -77,27 +77,8 @@ function inferFlowSteps(sentence: string): string[] {
   return ["开始", `输入: ${topic}`, "核心处理", "结果校验", "输出结果", "结束"];
 }
 
-function inferModuleSteps(sentence: string): string[] {
-  const splitSteps = splitBySequenceHint(sentence);
-  if (splitSteps.length >= 3) {
-    return splitSteps;
-  }
-
-  const topic = extractTopic(sentence) || "系统";
-  return [
-    `${topic} - 用户端`,
-    `${topic} - 网关层`,
-    `${topic} - 业务服务层`,
-    `${topic} - 数据存储层`,
-    `${topic} - 缓存/消息层`,
-    `${topic} - 监控运维层`
-  ];
-}
-
 function expandSingleLineIntent(line: string, diagramType: DiagramType): string[] {
-  if (diagramType === "module_architecture") {
-    return inferModuleSteps(line);
-  }
+  void diagramType;
   return inferFlowSteps(line);
 }
 
@@ -110,9 +91,7 @@ export function generateElementsFromText(inputText: string, diagramType: Diagram
     lines = expandSingleLineIntent(lines[0], diagramType);
   }
 
-  const nodes = lines.map((line, index) =>
-    createNode(diagramType === "module_architecture" ? `Module: ${line}` : line, index)
-  );
+  const nodes = lines.map((line, index) => createNode(line, index));
   const edges: DiagramElement[] = [];
 
   for (let index = 0; index < nodes.length - 1; index += 1) {
@@ -212,7 +191,7 @@ export function generateReasoningSummary(params: {
   changeSummary?: string;
 }): Record<string, unknown> {
   return {
-    layeringReason: params.diagramType === "module_architecture" ? "按职责和依赖方向分层" : "按步骤顺序组织流程",
+    layeringReason: "按步骤顺序组织流程",
     keyDependencies: ["上游触发", "核心处理", "下游输出"],
     alternatives: ["可改为事件驱动链路", "可按领域边界拆分子模块"],
     sources: params.sourceRefs,

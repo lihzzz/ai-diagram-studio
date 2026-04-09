@@ -1,4 +1,5 @@
-export type DiagramType = "flowchart" | "module_architecture";
+export type DiagramType = "flowchart";
+export type DiagramEngineType = "reactflow_elk" | "excalidraw";
 
 export type DiagramElement = {
   id: string;

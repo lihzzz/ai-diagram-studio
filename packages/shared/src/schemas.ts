@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const diagramTypeSchema = z.enum(["flowchart", "module_architecture"]);
+export const diagramTypeSchema = z.enum(["flowchart"]);
+export const diagramEngineSchema = z.enum(["reactflow_elk", "excalidraw"]);
 export const generationModeSchema = z.enum(["text", "image", "document", "chat"]);
 export const generationJobTypeSchema = z.enum([
   "text_generate",
@@ -26,6 +27,7 @@ export const diagramSchema = z.object({
   id: z.string(),
   title: z.string(),
   type: diagramTypeSchema,
+  engineType: diagramEngineSchema,
   currentVersion: z.number().int().positive(),
   elements: z.array(diagramElementSchema),
   appState: z.record(z.unknown()).nullable(),
@@ -36,12 +38,14 @@ export const diagramSchema = z.object({
 export const createDiagramSchema = z.object({
   title: z.string().min(1).max(200),
   type: diagramTypeSchema,
+  engineType: diagramEngineSchema.default("reactflow_elk"),
   elements: z.array(diagramElementSchema).default([]),
   appState: z.record(z.unknown()).optional()
 });
 
 export const updateDiagramSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  engineType: diagramEngineSchema.optional(),
   elements: z.array(diagramElementSchema).optional(),
   appState: z.record(z.unknown()).nullable().optional(),
   version: z.number().int().positive()
@@ -97,6 +101,7 @@ export const setDefaultModelSchema = z.object({
 });
 
 export type DiagramType = z.infer<typeof diagramTypeSchema>;
+export type DiagramEngineType = z.infer<typeof diagramEngineSchema>;
 export type DiagramElement = z.infer<typeof diagramElementSchema>;
 export type DiagramDto = z.infer<typeof diagramSchema>;
 export type GenerationMode = z.infer<typeof generationModeSchema>;

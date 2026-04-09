@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { AiPanel } from "../components/AiPanel";
 import { DiagramCanvas } from "../components/DiagramCanvas";
+import { ReactFlowCanvas } from "../components/ReactFlowCanvas";
 import { ModelSettingsPanel } from "../components/ModelSettingsPanel";
 import { ReasoningPanel } from "../components/ReasoningPanel";
 import { TemplateIconPanel } from "../components/TemplateIconPanel";
@@ -12,7 +13,7 @@ import { useChatStore } from "../stores/chatStore";
 import { useEditorStore } from "../stores/editorStore";
 import { useJobStore } from "../stores/jobStore";
 import { useModelStore } from "../stores/modelStore";
-import type { DiagramRecord } from "../types";
+import type { DiagramEngineType, DiagramRecord } from "../types";
 
 type EditorPageProps = {
   onBack: () => void;
@@ -38,6 +39,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [engineDraft, setEngineDraft] = useState<DiagramEngineType>("reactflow_elk");
 
   const hasPreview = useMemo(() => Boolean(activeJobId && previewElements && previewElements.length > 0), [activeJobId, previewElements]);
   const canApplyPreview = useMemo(() => hasPreview, [hasPreview]);
@@ -65,6 +67,10 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
   useEffect(() => {
     setTitleDraft(currentDiagram?.title ?? "");
   }, [currentDiagram?.id, currentDiagram?.title]);
+
+  useEffect(() => {
+    setEngineDraft(currentDiagram?.engineType ?? "reactflow_elk");
+  }, [currentDiagram?.engineType]);
 
   const pollJob = async (jobId: string) => {
     let done = false;
@@ -144,6 +150,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
       const diagramId = currentDiagram.id;
       const { jobId } = await api.createGenerationJob({
         ...body,
+        diagramType: "flowchart",
         diagramId
       });
       setRunning(jobId);
@@ -163,26 +170,44 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     }
   };
 
-  const handleRunText = async (inputText: string, diagramType: "flowchart" | "module_architecture") => {
+  const handleRunText = async (inputText: string) => {
     await runGeneration({
       mode: "text",
-      diagramType,
       inputText
     });
   };
 
-  const handleRunImage = async (file: File, diagramType: "flowchart" | "module_architecture") => {
+  const handleRunImage = async (file: File) => {
+    if (engineDraft === "excalidraw") {
+      setResult({
+        status: "failed",
+        progress: 100,
+        previewElements: null,
+        reasoningSummary: null,
+        error: "当前引擎仅支持文本/对话改图，请切换到 React Flow + ELK 后使用图生图。"
+      });
+      return;
+    }
     const asset = await api.uploadAsset(file);
     addAsset(asset);
     await api.parseAsset(asset.id);
     await runGeneration({
       mode: "image",
-      diagramType,
       assetId: asset.id
     });
   };
 
-  const handleRunDocument = async (file: File, diagramType: "flowchart" | "module_architecture", parseFirst: boolean) => {
+  const handleRunDocument = async (file: File, parseFirst: boolean) => {
+    if (engineDraft === "excalidraw") {
+      setResult({
+        status: "failed",
+        progress: 100,
+        previewElements: null,
+        reasoningSummary: null,
+        error: "当前引擎仅支持文本/对话改图，请切换到 React Flow + ELK 后使用文档生图。"
+      });
+      return;
+    }
     const asset = await api.uploadAsset(file);
     addAsset(asset);
     if (parseFirst) {
@@ -192,7 +217,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     }
     await runGeneration({
       mode: "document",
-      diagramType,
       assetId: asset.id
     });
   };
@@ -254,6 +278,7 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
       pushHistory();
       const updated = await api.saveDiagram(currentDiagram.id, {
         title: titleDraft.trim() || currentDiagram.title,
+        engineType: engineDraft,
         elements,
         appState: currentDiagram.appState
       });
@@ -330,6 +355,24 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
           aria-label="图表标题"
         />
         <div className="row-actions">
+          <label className="field-inline" htmlFor="engine-select">
+            引擎
+            <select
+              id="engine-select"
+              value={engineDraft}
+              onChange={(event) => {
+                const nextEngine = event.target.value as DiagramEngineType;
+                setEngineDraft(nextEngine);
+                setDiagram({
+                  ...currentDiagram,
+                  engineType: nextEngine
+                });
+              }}
+            >
+              <option value="reactflow_elk">React Flow + ELK</option>
+              <option value="excalidraw">Excalidraw</option>
+            </select>
+          </label>
           <button type="button" onClick={undoLocal}>
             撤销本地
           </button>
@@ -358,17 +401,31 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
         </div>
 
         <div className="center-column">
-          <DiagramCanvas
-            elements={hasPreview ? (previewElements ?? []) : elements}
-            selection={selection}
-            readOnly={hasPreview}
-            onSelect={(ids: string[]) => setSelection(ids)}
-            onElementsChange={(nextElements) => {
-              if (!hasPreview) {
-                setElements(nextElements);
-              }
-            }}
-          />
+          {engineDraft === "reactflow_elk" ? (
+            <ReactFlowCanvas
+              elements={hasPreview ? (previewElements ?? []) : elements}
+              selection={selection}
+              readOnly={hasPreview}
+              onSelect={(ids: string[]) => setSelection(ids)}
+              onElementsChange={(nextElements) => {
+                if (!hasPreview) {
+                  setElements(nextElements);
+                }
+              }}
+            />
+          ) : (
+            <DiagramCanvas
+              elements={hasPreview ? (previewElements ?? []) : elements}
+              selection={selection}
+              readOnly={hasPreview}
+              onSelect={(ids: string[]) => setSelection(ids)}
+              onElementsChange={(nextElements) => {
+                if (!hasPreview) {
+                  setElements(nextElements);
+                }
+              }}
+            />
+          )}
         </div>
 
         <div className="right-column">

@@ -32,15 +32,13 @@ export function layoutGraphWithDagre(
   options: LayoutOptions
 ): Map<string, { x: number; y: number }> {
   const g = new dagre.graphlib.Graph();
-
-  // 根据图表类型配置布局方向
-  const isHorizontal = options.diagramType === "module_architecture";
+  void options;
 
   // 配置布局参数
   g.setGraph({
-    rankdir: isHorizontal ? "LR" : "TB", // LR=左到右(架构图), TB=上到下(流程图)
-    nodesep: isHorizontal ? 100 : 80, // 同一层级节点间距
-    ranksep: isHorizontal ? 150 : 120, // 层级间距
+    rankdir: "TB",
+    nodesep: 80,
+    ranksep: 120,
     edgesep: 40, // 边之间的间距
     marginx: 80,
     marginy: 80,

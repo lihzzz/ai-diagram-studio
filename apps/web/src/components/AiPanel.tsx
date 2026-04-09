@@ -1,13 +1,9 @@
 import { useState } from "react";
 
 type AiPanelProps = {
-  onRunText: (inputText: string, diagramType: "flowchart" | "module_architecture") => Promise<void>;
-  onRunImage: (file: File, diagramType: "flowchart" | "module_architecture") => Promise<void>;
-  onRunDocument: (
-    file: File,
-    diagramType: "flowchart" | "module_architecture",
-    parseFirst: boolean
-  ) => Promise<void>;
+  onRunText: (inputText: string) => Promise<void>;
+  onRunImage: (file: File) => Promise<void>;
+  onRunDocument: (file: File, parseFirst: boolean) => Promise<void>;
   onRunChat: (instruction: string) => Promise<void>;
 };
 
@@ -16,7 +12,6 @@ const TABS = ["text", "image", "document", "chat"] as const;
 export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiPanelProps) {
   const [tab, setTab] = useState<(typeof TABS)[number]>("text");
   const [inputText, setInputText] = useState("");
-  const [diagramType, setDiagramType] = useState<"flowchart" | "module_architecture">("flowchart");
   const [file, setFile] = useState<File | null>(null);
   const [chatInstruction, setChatInstruction] = useState("");
   const [running, setRunning] = useState(false);
@@ -28,13 +23,13 @@ export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiP
     setRunning(true);
     try {
       if (tab === "text") {
-        await onRunText(inputText, diagramType);
+        await onRunText(inputText);
       }
       if (tab === "image" && file) {
-        await onRunImage(file, diagramType);
+        await onRunImage(file);
       }
       if (tab === "document" && file) {
-        await onRunDocument(file, diagramType, true);
+        await onRunDocument(file, true);
       }
       if (tab === "chat") {
         await onRunChat(chatInstruction);
@@ -59,14 +54,6 @@ export function AiPanel({ onRunText, onRunImage, onRunDocument, onRunChat }: AiP
           </button>
         ))}
       </div>
-
-      <label className="field-label">
-        图类型
-        <select value={diagramType} onChange={(event) => setDiagramType(event.target.value as "flowchart" | "module_architecture")}>
-          <option value="flowchart">流程图</option>
-          <option value="module_architecture">模块架构图</option>
-        </select>
-      </label>
 
       {tab === "text" ? (
         <textarea

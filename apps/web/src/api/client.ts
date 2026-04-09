@@ -1,4 +1,4 @@
-import type { DiagramRecord, GenerationJobResult } from "../types";
+import type { DiagramEngineType, DiagramRecord, GenerationJobResult } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
 
@@ -25,7 +25,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   listDiagrams: () => request<DiagramRecord[]>("/api/diagrams"),
   getDiagram: (id: string) => request<DiagramRecord>(`/api/diagrams/${id}`),
-  createDiagram: (body: { title: string; type: "flowchart" | "module_architecture" }) =>
+  createDiagram: (body: { title: string; type: "flowchart"; engineType?: DiagramEngineType }) =>
     request<DiagramRecord>("/api/diagrams", {
       method: "POST",
       body: JSON.stringify(body)

@@ -21,15 +21,8 @@ describe("mock generation", () => {
     expect(edges.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("should expand single-sentence architecture intent into modules", () => {
-    const elements = generateElementsFromText("生成一个订单系统模块图", "module_architecture");
-    const nodeTexts = elements.filter((item) => item.type === "rectangle").map((item) => item.text ?? "");
-    expect(nodeTexts.some((text) => text.includes("Module:"))).toBe(true);
-    expect(nodeTexts.length).toBeGreaterThanOrEqual(4);
-  });
-
   it("should generate from document chunks", () => {
-    const elements = generateElementsFromDocument(["模块A职责", "模块B依赖A"], "module_architecture");
+    const elements = generateElementsFromDocument(["模块A职责", "模块B依赖A"], "flowchart");
     expect(elements.some((item) => item.type === "arrow")).toBe(true);
   });
 

@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "@excalidraw/excalidraw/index.css";
+import "@xyflow/react/dist/style.css";
 
 import { App } from "./App";
 import "./styles.css";

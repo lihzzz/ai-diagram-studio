@@ -1,3 +1,5 @@
+export type DiagramEngineType = "reactflow_elk" | "excalidraw";
+
 export type DiagramElement = {
   id: string;
   type: string;
@@ -13,7 +15,8 @@ export type DiagramElement = {
 export type DiagramRecord = {
   id: string;
   title: string;
-  type: "flowchart" | "module_architecture";
+  type: "flowchart";
+  engineType: DiagramEngineType;
   currentVersion: number;
   elements: DiagramElement[];
   appState: Record<string, unknown> | null;

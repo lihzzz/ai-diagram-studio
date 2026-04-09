@@ -1,16 +1,16 @@
 import { useMemo, useState } from "react";
 
-import type { DiagramRecord } from "../types";
+import type { DiagramEngineType, DiagramRecord } from "../types";
 
 type DiagramListPageProps = {
   diagrams: DiagramRecord[];
   onOpenDiagram: (id: string) => Promise<void>;
-  onCreateDiagram: (title: string, type: "flowchart" | "module_architecture") => Promise<void>;
+  onCreateDiagram: (title: string, engineType: DiagramEngineType) => Promise<void>;
 };
 
 export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: DiagramListPageProps) {
   const [title, setTitle] = useState("新建图表");
-  const [type, setType] = useState<"flowchart" | "module_architecture">("flowchart");
+  const [engineType, setEngineType] = useState<DiagramEngineType>("reactflow_elk");
   const formatDate = useMemo(
     () =>
       new Intl.DateTimeFormat("zh-CN", {
@@ -23,13 +23,13 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
   );
 
   const stats = useMemo(() => {
-    const flowchartCount = diagrams.filter((diagram) => diagram.type === "flowchart").length;
-    const architectureCount = diagrams.length - flowchartCount;
+    const reactFlowCount = diagrams.filter((diagram) => diagram.engineType === "reactflow_elk").length;
+    const excalidrawCount = diagrams.length - reactFlowCount;
     const totalNodes = diagrams.reduce((total, diagram) => total + diagram.elements.length, 0);
     return {
       total: diagrams.length,
-      flowchartCount,
-      architectureCount,
+      reactFlowCount,
+      excalidrawCount,
       totalNodes
     };
   }, [diagrams]);
@@ -44,7 +44,7 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
   );
 
   const handleCreate = async () => {
-    await onCreateDiagram(title, type);
+    await onCreateDiagram(title, engineType);
   };
 
   return (
@@ -65,12 +65,12 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
             <strong>{stats.total}</strong>
           </article>
           <article className="metric-card">
-            <p>流程图</p>
-            <strong>{stats.flowchartCount}</strong>
+            <p>React Flow + ELK</p>
+            <strong>{stats.reactFlowCount}</strong>
           </article>
           <article className="metric-card">
-            <p>架构图</p>
-            <strong>{stats.architectureCount}</strong>
+            <p>Excalidraw</p>
+            <strong>{stats.excalidrawCount}</strong>
           </article>
           <article className="metric-card">
             <p>节点总量</p>
@@ -82,7 +82,7 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
       <section className="create-shell" aria-label="创建图表">
         <div className="create-headline">
           <h2>新建工作区</h2>
-          <p>选择类型并命名，创建后直接进入可编辑画布。</p>
+          <p>流程图默认创建，选择绘图引擎后直接进入可编辑画布。</p>
         </div>
         <form
           className="create-form"
@@ -100,15 +100,15 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
               placeholder="例如：支付结算流程"
             />
           </label>
-          <label className="field-block" htmlFor="diagram-type">
-            类型
+          <label className="field-block" htmlFor="diagram-engine">
+            绘图风格引擎
             <select
-              id="diagram-type"
-              value={type}
-              onChange={(event) => setType(event.target.value as "flowchart" | "module_architecture")}
+              id="diagram-engine"
+              value={engineType}
+              onChange={(event) => setEngineType(event.target.value as DiagramEngineType)}
             >
-              <option value="flowchart">流程图</option>
-              <option value="module_architecture">模块架构图</option>
+              <option value="reactflow_elk">React Flow + ELK（默认）</option>
+              <option value="excalidraw">Excalidraw</option>
             </select>
           </label>
           <button type="submit" className="primary-btn create-submit">
@@ -129,14 +129,15 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
               <li key={diagram.id} className="diagram-card">
                 <div className="diagram-card-top">
                   <h3>{diagram.title}</h3>
-                  <span className="diagram-kind">
-                    {diagram.type === "flowchart" ? "流程图" : "模块架构图"}
-                  </span>
+                  <span className="diagram-kind">流程图</span>
                 </div>
                 <p className="diagram-id">{diagram.id}</p>
                 <div className="diagram-card-meta">
                   <span>版本 {diagram.currentVersion}</span>
                   <span>{diagram.elements.length} 个节点</span>
+                </div>
+                <div className="diagram-card-meta">
+                  <span>{diagram.engineType === "reactflow_elk" ? "React Flow + ELK" : "Excalidraw"}</span>
                 </div>
                 <div className="diagram-card-meta">
                   <span>更新于 {formatDate.format(new Date(diagram.updatedAt))}</span>

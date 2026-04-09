@@ -30,15 +30,16 @@ describe("layoutGraphWithDagre", () => {
     }
   });
 
-  it("should layout module architecture horizontally", () => {
+  it("should layout flowchart vertically", () => {
     const graph = createSimpleGraph();
-    const positions = layoutGraphWithDagre(graph, { diagramType: "module_architecture" });
+    const positions = layoutGraphWithDagre(graph, { diagramType: "flowchart" });
 
-    // 架构图应该从左到右排列，所以结束节点的x坐标应该大于开始节点
+    // 流程图应为上到下布局，结束节点 y 应大于开始节点
     const startPos = positions.get("start");
     const endPos = positions.get("end");
     expect(startPos).toBeDefined();
     expect(endPos).toBeDefined();
+    expect((endPos?.y ?? 0) > (startPos?.y ?? 0)).toBe(true);
   });
 
   it("should handle empty graph", () => {
@@ -67,7 +68,7 @@ describe("layoutGraphWithDagre", () => {
 
     // 验证所有节点位置唯一（无重叠）
     const posSet = new Set<string>();
-    for (const [id, pos] of positions) {
+    for (const [, pos] of positions) {
       const key = `${pos.x},${pos.y}`;
       expect(posSet.has(key)).toBe(false);
       posSet.add(key);

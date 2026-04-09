@@ -14,7 +14,7 @@ import {
   setDefaultModelSchema,
   updateDiagramSchema
 } from "../types/schemas.js";
-import type { DiagramElement } from "../types/domain.js";
+import type { DiagramElement, DiagramEngineType } from "../types/domain.js";
 
 import { prisma } from "../db.js";
 import { config } from "../config.js";
@@ -34,6 +34,11 @@ const DOC_MIMES = new Set([
 ]);
 const ICON_MIMES = new Set(["image/png", "image/svg+xml", "image/webp", "image/jpeg", "image/jpg"]);
 const LEGACY_BUILTIN_MODEL_IDS = ["profile_openai_quality", "profile_anthropic_backup"];
+const DEFAULT_ENGINE_TYPE: DiagramEngineType = "reactflow_elk";
+
+function normalizeEngineType(value: unknown): DiagramEngineType {
+  return value === "excalidraw" ? "excalidraw" : "reactflow_elk";
+}
 
 function mapModeToJobType(mode: "text" | "image" | "document" | "chat"): string {
   if (mode === "text") {
@@ -60,6 +65,21 @@ function parseAppState(appStateJson: string | null): Record<string, unknown> | n
   return safeJsonParse<Record<string, unknown> | null>(appStateJson, null);
 }
 
+function ensureAppStateWithEngine(
+  appState: Record<string, unknown> | null | undefined,
+  engineType: DiagramEngineType
+): Record<string, unknown> {
+  const base = appState && typeof appState === "object" ? appState : {};
+  return {
+    ...base,
+    engineType
+  };
+}
+
+function readEngineTypeFromAppState(appState: Record<string, unknown> | null): DiagramEngineType {
+  return normalizeEngineType(appState?.engineType);
+}
+
 function diagramToDto(record: {
   id: string;
   title: string;
@@ -70,13 +90,17 @@ function diagramToDto(record: {
   createdAt: Date;
   updatedAt: Date;
 }): Record<string, unknown> {
+  const appState = parseAppState(record.appStateJson);
+  const engineType = readEngineTypeFromAppState(appState);
+  const normalizedAppState = ensureAppStateWithEngine(appState, engineType);
   return {
     id: record.id,
     title: record.title,
-    type: record.type,
+    type: "flowchart",
+    engineType,
     currentVersion: record.currentVersion,
     elements: parseElements(record.elementsJson),
-    appState: parseAppState(record.appStateJson),
+    appState: normalizedAppState,
     createdAt: toIso(record.createdAt),
     updatedAt: toIso(record.updatedAt)
   };
@@ -319,6 +343,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     where: { defaultModelProfileId: { in: LEGACY_BUILTIN_MODEL_IDS } },
     data: { defaultModelProfileId: null }
   });
+  await prisma.diagram.deleteMany({
+    where: { type: "module_architecture" }
+  });
+  await prisma.template.deleteMany({
+    where: { diagramType: "module_architecture" }
+  });
 
   app.get("/health", async () => ({ ok: true, ts: new Date().toISOString() }));
 
@@ -326,13 +356,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const payload = createDiagramSchema.parse(request.body);
     const diagramId = createId("diagram");
     const nowElements = payload.elements ?? [];
+    const engineType = normalizeEngineType(payload.engineType);
     const diagram = await prisma.diagram.create({
       data: {
         id: diagramId,
         title: payload.title,
-        type: payload.type,
+        type: "flowchart",
         elementsJson: asJsonString(nowElements),
-        appStateJson: asJsonString(payload.appState ?? null),
+        appStateJson: asJsonString(ensureAppStateWithEngine(payload.appState, engineType)),
         currentVersion: 1
       }
     });
@@ -358,14 +389,17 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const payload = updateDiagramSchema.parse(request.body);
     const diagram = await prisma.diagram.findUnique({ where: { id: request.params.id } });
     enforce(diagram && !diagram.isDeleted, 404, "diagram not found");
+    const previousAppState = parseAppState(diagram.appStateJson);
+    const previousEngineType = readEngineTypeFromAppState(previousAppState);
+    const nextEngineType = payload.engineType ? normalizeEngineType(payload.engineType) : previousEngineType;
+    const nextAppStateRaw = payload.appState !== undefined ? payload.appState : previousAppState;
     const updated = await prisma.diagram.update({
       where: { id: diagram.id },
       data: {
         title: payload.title ?? diagram.title,
         elementsJson:
           payload.elements !== undefined ? asJsonString(payload.elements) : diagram.elementsJson,
-        appStateJson:
-          payload.appState !== undefined ? asJsonString(payload.appState) : diagram.appStateJson
+        appStateJson: asJsonString(ensureAppStateWithEngine(nextAppStateRaw, nextEngineType))
       }
     });
     return diagramToDto(updated);
@@ -423,10 +457,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
     if (payload.mode === "image" || payload.mode === "document") {
       enforce(payload.assetId, 400, "assetId is required in image/document mode");
+      enforce(payload.diagramId, 400, "diagramId is required in image/document mode");
     }
     if (payload.mode === "chat") {
       enforce(payload.diagramId, 400, "diagramId is required in chat mode");
       enforce(payload.instruction || payload.inputText, 400, "instruction is required in chat mode");
+    }
+
+    if ((payload.mode === "image" || payload.mode === "document") && payload.diagramId) {
+      const diagram = await prisma.diagram.findUnique({ where: { id: payload.diagramId } });
+      enforce(diagram && !diagram.isDeleted, 404, "diagram not found");
+      const appState = parseAppState(diagram.appStateJson);
+      const engineType = readEngineTypeFromAppState(appState);
+      enforce(engineType === DEFAULT_ENGINE_TYPE, 422, "image/document mode only supports React Flow + ELK engine");
     }
 
     const modelProfile = payload.modelProfileId
@@ -451,7 +494,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         inputAssetId: payload.assetId ?? null,
         inputType: payload.mode,
         irJson: asJsonString({
-          diagramType: payload.diagramType,
+          diagramType: "flowchart",
           options: payload.options ?? {},
           instruction: payload.instruction ?? null,
           selection: Array.isArray(payload.options?.selection) ? payload.options.selection : [],
@@ -697,7 +740,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         inputAssetId: null,
         inputType: "chat",
         irJson: asJsonString({
-          diagramType: diagram.type,
+          diagramType: "flowchart",
           instruction: payload.content,
           selection: payload.selection ?? [],
           sessionId: session.id,
@@ -755,6 +798,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     const diagram = await prisma.diagram.findUnique({ where: { id: body.diagramId } });
     enforce(diagram, 404, "diagram not found");
+    enforce(diagram.type === "flowchart", 422, "template only supports flowchart");
 
     const templateJson = safeJsonParse<{ elements?: DiagramElement[] }>(template.templateJson, {});
     const elements = templateJson.elements ?? [];

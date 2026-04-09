@@ -4,35 +4,6 @@ const prisma = new PrismaClient();
 
 const builtinTemplates = [
   {
-    id: "tpl_three_layer",
-    name: "通用三层架构",
-    category: "architecture",
-    diagramType: "module_architecture",
-    templateJson: {
-      elements: [
-        { id: "n1", type: "rectangle", x: 120, y: 80, width: 240, height: 90, text: "接入层" },
-        { id: "n2", type: "rectangle", x: 120, y: 220, width: 240, height: 90, text: "服务层" },
-        { id: "n3", type: "rectangle", x: 120, y: 360, width: 240, height: 90, text: "数据层" },
-        {
-          id: "e1",
-          type: "arrow",
-          x: 200,
-          y: 140,
-          text: "n1->n2",
-          meta: { fromId: "n1", toId: "n2" }
-        },
-        {
-          id: "e2",
-          type: "arrow",
-          x: 200,
-          y: 280,
-          text: "n2->n3",
-          meta: { fromId: "n2", toId: "n3" }
-        }
-      ]
-    }
-  },
-  {
     id: "tpl_order_flow",
     name: "标准订单流程",
     category: "flow",
