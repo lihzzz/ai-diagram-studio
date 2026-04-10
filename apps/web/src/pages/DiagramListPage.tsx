@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { DiagramRecord } from "../types";
 
@@ -9,162 +9,269 @@ type DiagramListPageProps = {
 };
 
 export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: DiagramListPageProps) {
-  const [title, setTitle] = useState("新建图表");
-  const [type, setType] = useState<"flowchart" | "module_architecture">("flowchart");
-  const formatDate = useMemo(
-    () =>
-      new Intl.DateTimeFormat("zh-CN", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit"
-      }),
-    []
-  );
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createTitle, setCreateTitle] = useState("");
+  const [createType, setCreateType] = useState<"flowchart" | "module_architecture">("flowchart");
+
+
+  const formatRelative = useCallback((iso: string): string => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const hours = Math.floor(diff / 3600000);
+    if (hours < 1) return "刚刚";
+    if (hours < 24) return `${hours} 小时前`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days} 天前`;
+    return new Date(iso).toLocaleDateString("zh-CN");
+  }, []);
 
   const stats = useMemo(() => {
-    const flowchartCount = diagrams.filter((diagram) => diagram.type === "flowchart").length;
+    const flowchartCount = diagrams.filter((d) => d.type === "flowchart").length;
     const architectureCount = diagrams.length - flowchartCount;
-    const totalNodes = diagrams.reduce((total, diagram) => total + diagram.elements.length, 0);
-    return {
-      total: diagrams.length,
-      flowchartCount,
-      architectureCount,
-      totalNodes
-    };
+    const totalNodes = diagrams.reduce((t, d) => t + d.elements.length, 0);
+    return { total: diagrams.length, flowchartCount, architectureCount, totalNodes };
   }, [diagrams]);
 
   const orderedDiagrams = useMemo(
-    () =>
-      [...diagrams].sort(
-        (left, right) =>
-          new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
-      ),
+    () => [...diagrams].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
     [diagrams]
   );
 
   const handleCreate = async () => {
-    await onCreateDiagram(title, type);
+    await onCreateDiagram(createTitle.trim() || "未命名图表", createType);
+    setCreateOpen(false);
+    setCreateTitle("");
   };
 
   return (
-    <section className="dashboard-page">
-      <div className="dashboard-glow dashboard-glow-left" aria-hidden="true" />
-      <div className="dashboard-glow dashboard-glow-right" aria-hidden="true" />
-
-      <header className="dashboard-hero">
-        <div className="hero-main">
-          <p className="hero-kicker">AI Diagram Studio</p>
-          <h1>让图表生成和改图像对话一样高效</h1>
-          <p className="hero-subtitle">文本、图片、文档到结构化图表，支持持续上下文与结果预览。</p>
+    <div className="dlp">
+      {/* Sidebar */}
+      <aside className="dlp-sidebar">
+        <div className="dlp-logo">
+          <div className="dlp-logo-icon" />
+          <span className="dlp-logo-text">Diagram Studio</span>
         </div>
 
-        <div className="hero-metrics" aria-label="图表统计">
-          <article className="metric-card">
-            <p>总图表</p>
-            <strong>{stats.total}</strong>
-          </article>
-          <article className="metric-card">
-            <p>流程图</p>
-            <strong>{stats.flowchartCount}</strong>
-          </article>
-          <article className="metric-card">
-            <p>架构图</p>
-            <strong>{stats.architectureCount}</strong>
-          </article>
-          <article className="metric-card">
-            <p>节点总量</p>
-            <strong>{stats.totalNodes}</strong>
-          </article>
-        </div>
-      </header>
-
-      <section className="create-shell" aria-label="创建图表">
-        <div className="create-headline">
-          <h2>新建工作区</h2>
-          <p>选择类型并命名，创建后直接进入可编辑画布。</p>
-        </div>
-        <form
-          className="create-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleCreate();
-          }}
-        >
-          <label className="field-block" htmlFor="diagram-title">
-            标题
-            <input
-              id="diagram-title"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="例如：支付结算流程"
-            />
-          </label>
-          <label className="field-block" htmlFor="diagram-type">
-            类型
-            <select
-              id="diagram-type"
-              value={type}
-              onChange={(event) => setType(event.target.value as "flowchart" | "module_architecture")}
-            >
-              <option value="flowchart">流程图</option>
-              <option value="module_architecture">模块架构图</option>
-            </select>
-          </label>
-          <button type="submit" className="primary-btn create-submit">
-            创建图表
+        <nav className="dlp-nav">
+          <a className="dlp-nav-link dlp-nav-link--active" href="#">
+            <span className="dlp-nav-icon" />
+            <span>工作台</span>
+          </a>
+          <button className="dlp-nav-link" onClick={() => setCreateOpen(true)}>
+            <span className="dlp-nav-icon" />
+            <span>新建图表</span>
           </button>
-        </form>
-      </section>
+          <a className="dlp-nav-link" href="#">
+            <span className="dlp-nav-icon" />
+            <span>模型中心</span>
+          </a>
+          <a className="dlp-nav-link" href="#">
+            <span className="dlp-nav-icon" />
+            <span>模板库</span>
+          </a>
+        </nav>
 
-      <section className="diagram-section" aria-label="图表列表">
-        <div className="section-head">
-          <h2>最近图表</h2>
-          <p>按最近更新时间排序，快速回到上次工作进度。</p>
+        <div className="dlp-sidebar-footer">
+          <div className="dlp-glass">
+            <div className="dlp-avatar" />
+            <div className="dlp-user-info">
+              <div className="dlp-user-name">本地用户</div>
+              <div className="dlp-user-date">{new Date().toLocaleDateString("zh-CN")}</div>
+            </div>
+          </div>
         </div>
+      </aside>
 
-        {orderedDiagrams.length > 0 ? (
-          <ul className="diagram-grid">
-            {orderedDiagrams.map((diagram) => (
-              <li key={diagram.id} className="diagram-card">
-                <div className="diagram-card-top">
-                  <h3>{diagram.title}</h3>
-                  <span className="diagram-kind">
-                    {diagram.type === "flowchart" ? "流程图" : "模块架构图"}
-                  </span>
-                </div>
-                <p className="diagram-id">{diagram.id}</p>
-                <div className="diagram-card-meta">
-                  <span>版本 {diagram.currentVersion}</span>
-                  <span>{diagram.elements.length} 个节点</span>
-                </div>
-                <div className="diagram-card-meta">
-                  <span>更新于 {formatDate.format(new Date(diagram.updatedAt))}</span>
-                </div>
-                <div className="diagram-card-actions">
-                  <button type="button" onClick={() => void onOpenDiagram(diagram.id)}>
-                    打开图表
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="empty-state">
-            <h3>还没有图表</h3>
-            <p>先创建一个图表，系统会自动进入编辑器并保存初始版本。</p>
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={() => {
-                void handleCreate();
-              }}
-            >
-              立即创建
+      {/* Main */}
+      <main className="dlp-main">
+        {/* Header */}
+        <header className="dlp-header">
+          <div className="dlp-search">
+            <span className="dlp-search-icon" />
+            <input placeholder="搜索图表..." type="text" />
+          </div>
+          <div className="dlp-header-actions">
+            <div className="dlp-status">
+              <span className="dlp-status-dot" />
+              <span>服务运行中</span>
+            </div>
+            <button className="dlp-btn-primary" onClick={() => setCreateOpen(true)}>
+              + 新建图表
             </button>
           </div>
-        )}
-      </section>
-    </section>
+        </header>
+
+        {/* Stats */}
+        <section className="dlp-stats">
+          <div className="dlp-glass dlp-stat-card dlp-stat-card--blue">
+            <div className="dlp-stat-icon dlp-stat-icon--blue" />
+            <div className="dlp-stat-value">{stats.total}</div>
+            <div className="dlp-stat-label">总图表</div>
+          </div>
+          <div className="dlp-glass dlp-stat-card dlp-stat-card--green">
+            <div className="dlp-stat-icon dlp-stat-icon--green" />
+            <div className="dlp-stat-value">{stats.flowchartCount}</div>
+            <div className="dlp-stat-label">流程图</div>
+          </div>
+          <div className="dlp-glass dlp-stat-card dlp-stat-card--orange">
+            <div className="dlp-stat-icon dlp-stat-icon--orange" />
+            <div className="dlp-stat-value">{stats.architectureCount}</div>
+            <div className="dlp-stat-label">架构图</div>
+          </div>
+          <div className="dlp-glass dlp-stat-card dlp-stat-card--purple">
+            <div className="dlp-stat-icon dlp-stat-icon--purple" />
+            <div className="dlp-stat-value">{stats.totalNodes}</div>
+            <div className="dlp-stat-label">总节点数</div>
+          </div>
+        </section>
+
+        {/* Recent Diagrams */}
+        <section className="dlp-section">
+          <div className="dlp-section-head">
+            <h2>最近编辑的图表</h2>
+          </div>
+
+          {orderedDiagrams.length > 0 ? (
+            <div className="dlp-grid">
+              {orderedDiagrams.map((diagram) => (
+                <div
+                  key={diagram.id}
+                  className="dlp-diagram-card dlp-glass"
+                  onClick={() => void onOpenDiagram(diagram.id)}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="dlp-diagram-preview">
+                    <div className="dlp-diagram-thumb">
+                      <div className="dlp-diagram-thumb-inner">
+                        {diagram.type === "flowchart" ? (
+                          <span className="dlp-type-badge dlp-type-badge--flow">流程</span>
+                        ) : (
+                          <span className="dlp-type-badge dlp-type-badge--arch">架构</span>
+                        )}
+                        <div className="dlp-thumb-shapes">
+                          {Array.from({ length: Math.min(diagram.elements.length, 6) }).map((_, i) => (
+                            <div
+                              key={i}
+                              className={`dlp-thumb-shape dlp-thumb-shape--${i % 3}`}
+                              style={{ left: `${15 + i * 28}px`, top: `${10 + (i % 2) * 30}px` }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="dlp-diagram-info">
+                    <div className="dlp-diagram-title">{diagram.title}</div>
+                    <div className="dlp-diagram-meta">
+                      <span>{diagram.elements.length} 节点</span>
+                      <span className="dlp-dot" />
+                      <span>{formatRelative(diagram.updatedAt)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* New card */}
+              <div
+                className="dlp-diagram-card dlp-diagram-card--new"
+                onClick={() => setCreateOpen(true)}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="dlp-diagram-preview">
+                  <div className="dlp-diagram-thumb dlp-diagram-thumb--new">
+                    <div className="dlp-plus-icon">+</div>
+                  </div>
+                </div>
+                <div className="dlp-diagram-info">
+                  <div className="dlp-diagram-title dlp-diagram-title--new">创建新图表</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="dlp-glass dlp-empty">
+              <div className="dlp-empty-icon" />
+              <h3>还没有图表</h3>
+              <p>创建第一个图表开始你的旅程</p>
+              <button className="dlp-btn-primary" onClick={() => setCreateOpen(true)}>
+                立即创建
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Templates */}
+        <section className="dlp-section dlp-templates-section">
+          <div className="dlp-section-head">
+            <h2>内置模板</h2>
+          </div>
+          <div className="dlp-template-grid">
+            <div className="dlp-template-card dlp-glass">
+              <div className="dlp-tpl-preview dlp-tpl-preview--flow">
+                <div className="dlp-tpl-flow-demo" />
+              </div>
+              <div className="dlp-tpl-name">流程图模板</div>
+            </div>
+            <div className="dlp-template-card dlp-glass">
+              <div className="dlp-tpl-preview dlp-tpl-preview--arch">
+                <div className="dlp-tpl-arch-demo" />
+              </div>
+              <div className="dlp-tpl-name">三层架构</div>
+            </div>
+            <div className="dlp-template-card dlp-glass">
+              <div className="dlp-tpl-preview dlp-tpl-preview--order">
+                <div className="dlp-tpl-order-demo" />
+              </div>
+              <div className="dlp-tpl-name">订单流程</div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {/* Create Modal */}
+      {createOpen ? (
+        <div className="dlp-modal-overlay" onClick={() => setCreateOpen(false)}>
+          <div className="dlp-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="dlp-modal-head">
+              <h3>新建图表</h3>
+              <button className="dlp-modal-close" onClick={() => setCreateOpen(false)}>×</button>
+            </div>
+            <div className="dlp-modal-body">
+              <label className="dlp-field">
+                <span>标题</span>
+                <input
+                  value={createTitle}
+                  onChange={(e) => setCreateTitle(e.target.value)}
+                  placeholder="例如：支付结算流程"
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === "Enter") void handleCreate(); }}
+                />
+              </label>
+              <label className="dlp-field">
+                <span>类型</span>
+                <div className="dlp-type-selector">
+                  <button
+                    className={`dlp-type-btn ${createType === "flowchart" ? "dlp-type-btn--active" : ""}`}
+                    onClick={() => setCreateType("flowchart")}
+                  >
+                    流程图
+                  </button>
+                  <button
+                    className={`dlp-type-btn ${createType === "module_architecture" ? "dlp-type-btn--active" : ""}`}
+                    onClick={() => setCreateType("module_architecture")}
+                  >
+                    模块架构图
+                  </button>
+                </div>
+              </label>
+            </div>
+            <div className="dlp-modal-foot">
+              <button className="dlp-btn-ghost" onClick={() => setCreateOpen(false)}>取消</button>
+              <button className="dlp-btn-primary" onClick={() => void handleCreate()}>创建</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }

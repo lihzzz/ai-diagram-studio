@@ -1,11 +1,27 @@
-import type { DiagramRecord, GenerationJobResult } from "../types";
+import type { RenderConfig } from "@ai-diagram-studio/shared";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+import type { DiagramElement, DiagramRecord, GenerationJobResult, GenerationJobSummary } from "../types";
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+function sanitizeControlChars(input: string): string {
+  return input.replace(/[\x00-\x1f]/g, " ");
+}
+
+async function parseJsonSafe<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+  const cleaned = sanitizeControlChars(raw).trim();
+  if (!cleaned) {
+    return {} as T;
+  }
+  return JSON.parse(cleaned) as T;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   const hasBody = init?.body !== undefined && init?.body !== null;
-  if (hasBody && !headers.has("Content-Type")) {
+  const isFormDataBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (hasBody && !isFormDataBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -15,12 +31,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => null);
+    const payload = await parseJsonSafe<{ message?: string }>(response).catch(() => null);
     const message = payload?.message ?? `Request failed (${response.status})`;
     throw new Error(message);
   }
-  return (await response.json()) as T;
+  return parseJsonSafe<T>(response);
 }
+
+export type StyleTemplateDto = {
+  id: string;
+  name: string;
+  isBuiltin: boolean;
+  stylePrompt: string | null;
+  renderConfig: RenderConfig;
+  hasPreview: boolean;
+  createdAt: string;
+};
 
 export const api = {
   listDiagrams: () => request<DiagramRecord[]>("/api/diagrams"),
@@ -48,7 +74,16 @@ export const api = {
     request<{ ok: boolean; newVersion: number }>(`/api/change-sets/${id}/revert`, {
       method: "POST"
     }),
-  createGenerationJob: (body: Record<string, unknown>) =>
+  createGenerationJob: (body: {
+    mode: "text";
+    diagramType: "flowchart" | "module_architecture";
+    inputText: string;
+    diagramId?: string;
+    previousReasoning?: Record<string, unknown>;
+    existingElements?: DiagramElement[];
+    templateId?: string;
+    modelProfileId?: string;
+  }) =>
     request<{ jobId: string }>("/api/generation-jobs", {
       method: "POST",
       body: JSON.stringify(body)
@@ -59,37 +94,29 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ diagramId })
     }),
-  uploadAsset: async (file: File) => {
+  listDiagramJobs: (diagramId: string, page = 1, pageSize = 20) =>
+    request<GenerationJobSummary[]>(`/api/diagrams/${diagramId}/generation-jobs?page=${page}&pageSize=${pageSize}`),
+  listStyleTemplates: () => request<StyleTemplateDto[]>("/api/style-templates"),
+  createStyleTemplate: async (file: File, name?: string) => {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch(`${API_BASE}/api/assets/upload`, {
+    if (name?.trim()) {
+      formData.append("name", name.trim());
+    }
+    return request<StyleTemplateDto>("/api/style-templates", {
       method: "POST",
       body: formData
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.message ?? "upload failed");
-    }
-    return response.json() as Promise<{ id: string; assetType: string; filename: string }>;
   },
-  parseAsset: (id: string) =>
-    request<{ ok: boolean; assetId: string; chunkCount?: number }>(`/api/assets/${id}/parse`, {
+  analyzeStyleTemplate: (id: string) =>
+    request<StyleTemplateDto>(`/api/style-templates/${id}/analyze`, {
       method: "POST"
     }),
-  listAssetChunks: (id: string) =>
-    request<Array<{ id: string; chunkIndex: number; title: string | null; content: string; tokenCount: number }>>(
-      `/api/assets/${id}/chunks`
-    ),
-  createChatSession: (diagramId: string) =>
-    request<{ sessionId: string }>("/api/chat/sessions", {
-      method: "POST",
-      body: JSON.stringify({ diagramId })
+  deleteStyleTemplate: (id: string) =>
+    request<{ ok: boolean }>(`/api/style-templates/${id}`, {
+      method: "DELETE"
     }),
-  createChatTurn: (sessionId: string, body: { content: string; selection?: string[] }) =>
-    request<{ sessionId: string; userTurnId: string; jobId: string }>(`/api/chat/sessions/${sessionId}/turns`, {
-      method: "POST",
-      body: JSON.stringify(body)
-    }),
+  styleTemplatePreviewUrl: (id: string) => `${API_BASE}/api/style-templates/${id}/preview`,
   listTemplates: () =>
     request<Array<{ id: string; name: string; category: string; diagramType: string; isBuiltin: boolean }>>("/api/templates"),
   applyTemplate: (id: string, diagramId: string) =>

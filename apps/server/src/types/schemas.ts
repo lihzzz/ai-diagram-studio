@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const diagramTypeSchema = z.enum(["flowchart", "module_architecture"]);
-export const generationModeSchema = z.enum(["text", "image", "document", "chat"]);
+export const generationModeSchema = z.enum(["text"]);
 
 export const diagramElementSchema = z.object({
   id: z.string(),
@@ -12,6 +12,9 @@ export const diagramElementSchema = z.object({
   height: z.number().optional(),
   text: z.string().optional(),
   groupId: z.string().optional(),
+  parentId: z.string().optional(),
+  subtitle: z.string().optional(),
+  style: z.string().optional(),
   meta: z.record(z.unknown()).optional()
 });
 
@@ -33,26 +36,16 @@ export const createGenerationJobSchema = z.object({
   mode: generationModeSchema,
   diagramType: diagramTypeSchema,
   inputText: z.string().optional(),
-  assetId: z.string().optional(),
-  sessionId: z.string().optional(),
   diagramId: z.string().optional(),
-  instruction: z.string().optional(),
+  previousReasoning: z.record(z.unknown()).optional(),
+  existingElements: z.array(diagramElementSchema).optional(),
+  templateId: z.string().optional(),
   options: z.record(z.unknown()).optional(),
   modelProfileId: z.string().optional()
 });
 
 export const applyGenerationJobSchema = z.object({
   diagramId: z.string()
-});
-
-export const createChatSessionSchema = z.object({
-  diagramId: z.string()
-});
-
-export const createChatTurnSchema = z.object({
-  content: z.string().min(1),
-  selection: z.array(z.string()).optional(),
-  modelProfileId: z.string().optional()
 });
 
 export const createModelProfileSchema = z.object({

@@ -65,8 +65,8 @@ export function App() {
   }
 
   return (
-    <div className="app-shell app-shell-list">
-      {error ? <div className="error-banner">{error}</div> : null}
+    <>
+      {error ? <div className="error-banner" style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 100 }}>{error}</div> : null}
       <DiagramListPage diagrams={diagrams} onOpenDiagram={openDiagram} onCreateDiagram={createDiagram} />
       {currentDiagram ? (
         <button
@@ -79,6 +79,6 @@ export function App() {
           回到编辑器
         </button>
       ) : null}
-    </div>
+    </>
   );
 }

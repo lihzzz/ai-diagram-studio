@@ -67,7 +67,7 @@ describe("layoutGraphWithDagre", () => {
 
     // 验证所有节点位置唯一（无重叠）
     const posSet = new Set<string>();
-    for (const [id, pos] of positions) {
+    for (const [, pos] of positions) {
       const key = `${pos.x},${pos.y}`;
       expect(posSet.has(key)).toBe(false);
       posSet.add(key);

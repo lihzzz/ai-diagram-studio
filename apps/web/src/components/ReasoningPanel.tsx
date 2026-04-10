@@ -3,12 +3,15 @@ import ReactMarkdown from "react-markdown";
 
 type ReasoningPanelProps = {
   summary: Record<string, unknown> | null;
-  onAskFollowup: (instruction: string) => Promise<void>;
+  onAskFollowup?: (instruction: string) => Promise<void>;
 };
 
 function summaryToMarkdown(summary: Record<string, unknown>): string {
   const lines = ["### Reasoning Summary"];
   for (const [key, value] of Object.entries(summary)) {
+    if (key === "fallback" || key === "fallbackReason") {
+      continue;
+    }
     if (Array.isArray(value)) {
       lines.push(`- **${key}**: ${value.join(" / ")}`);
     } else {
@@ -22,6 +25,7 @@ export function ReasoningPanel({ summary, onAskFollowup }: ReasoningPanelProps) 
   const [collapsed, setCollapsed] = useState(false);
   const [followup, setFollowup] = useState("基于摘要继续优化");
   const markdown = useMemo(() => (summary ? summaryToMarkdown(summary) : ""), [summary]);
+  const isFallback = Boolean(summary?.fallback);
 
   const copySummary = async () => {
     if (!summary) {
@@ -35,6 +39,7 @@ export function ReasoningPanel({ summary, onAskFollowup }: ReasoningPanelProps) 
       <header className="panel-header">
         推理摘要
         <div className="row-actions">
+          {isFallback ? <span className="fallback-tag">兜底生成</span> : null}
           <button type="button" onClick={() => setCollapsed((value) => !value)}>
             {collapsed ? "展开" : "折叠"}
           </button>
@@ -48,12 +53,19 @@ export function ReasoningPanel({ summary, onAskFollowup }: ReasoningPanelProps) 
           <div className="markdown-view">
             <ReactMarkdown>{markdown}</ReactMarkdown>
           </div>
-          <div className="followup-row">
-            <input value={followup} onChange={(event) => setFollowup(event.target.value)} />
-            <button type="button" onClick={() => onAskFollowup(followup)}>
-              继续追问
-            </button>
-          </div>
+          {onAskFollowup ? (
+            <div className="followup-row">
+              <input value={followup} onChange={(event) => setFollowup(event.target.value)} />
+              <button
+                type="button"
+                onClick={() => {
+                  void onAskFollowup(followup);
+                }}
+              >
+                继续追问
+              </button>
+            </div>
+          ) : null}
         </>
       ) : null}
       {!summary ? <div className="empty-tip">暂无摘要</div> : null}

@@ -20,6 +20,7 @@
     "@fastify/multipart": "^9.0.1",
     "@prisma/client": "^6.6.0",
     "dagre": "^0.8.5",
+    "elkjs": "^0.9.3",
     "fastify": "^5.0.0",
     "zod": "^3.23.8"
   },

@@ -1,65 +1,86 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { DEFAULT_RENDER_CONFIG, type RenderConfig } from "@ai-diagram-studio/shared";
+
 import type { DiagramElement, DiagramType } from "../types/domain.js";
 
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { asJsonString, safeJsonParse } from "../utils/json.js";
 import { createId } from "../utils/id.js";
-import { applyChangeSet } from "../domain/diff.js";
+import { generateElementsFromText, generateReasoningSummary } from "../domain/mock-generation.js";
 import {
-  generateChangeSetFromInstruction,
-  generateElementsFromDocument,
-  generateElementsFromImageHint,
-  generateElementsFromText
-} from "../domain/mock-generation.js";
+  layoutGraphFallback,
+  layoutGraphWithELK,
+  type GraphEdge,
+  type GraphGroup,
+  type GraphNode,
+  type GraphNodeKind,
+  type GraphPayload
+} from "../domain/elk-layout.js";
 import type { Message } from "./openai-compatible.js";
 import { requestJsonFromModel } from "./openai-compatible.js";
-import { layoutGraphWithDagre, layoutGraphFallback } from "../domain/graph-layout.js";
 
 type JobMeta = {
   diagramType: DiagramType;
-  instruction?: string;
-  selection?: string[];
   modelProfileId?: string;
+  previousReasoning?: Record<string, unknown>;
+  existingElements?: DiagramElement[];
+  templateId?: string;
 };
 
-type GraphNodeKind = "start_end" | "process" | "decision" | "data";
+type TemplateInfo = {
+  id: string;
+  name: string;
+  stylePrompt: string | null;
+  renderConfig: RenderConfig;
+};
 
-type GraphNode = {
+type GroupFlatItem = {
   id: string;
   title: string;
-  kind?: GraphNodeKind;
-};
-
-type GraphEdge = {
-  from: string;
-  to: string;
-  label?: string;
-};
-
-type GraphPayload = {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  reasoningSummary?: Record<string, unknown>;
+  color?: string;
+  parentId?: string;
 };
 
 async function ensureDirs(): Promise<void> {
-  await fs.mkdir(config.assetStorageDir, { recursive: true });
+  await fs.mkdir(config.uploadStorageDir, { recursive: true });
   await fs.mkdir(config.exportOutputDir, { recursive: true });
+}
+
+function cleanControlChars(value: string): string {
+  return value.replace(/[\x00-\x1f]/g, " ").trim();
 }
 
 function parseJobMeta(raw: string | null): JobMeta {
   const parsed = safeJsonParse<Record<string, unknown>>(raw, {});
   const diagramType = parsed.diagramType === "module_architecture" ? "module_architecture" : "flowchart";
+  const previousReasoning =
+    parsed.previousReasoning && typeof parsed.previousReasoning === "object"
+      ? (parsed.previousReasoning as Record<string, unknown>)
+      : undefined;
+  const existingElements = Array.isArray(parsed.existingElements)
+    ? parsed.existingElements.filter((item): item is DiagramElement => {
+        if (!item || typeof item !== "object") {
+          return false;
+        }
+        const node = item as Partial<DiagramElement>;
+        return (
+          typeof node.id === "string" &&
+          typeof node.type === "string" &&
+          typeof node.x === "number" &&
+          typeof node.y === "number"
+        );
+      })
+    : undefined;
+
   return {
     diagramType,
-    instruction: typeof parsed.instruction === "string" ? parsed.instruction : undefined,
-    selection: Array.isArray(parsed.selection)
-      ? parsed.selection.filter((item): item is string => typeof item === "string")
-      : undefined,
-    modelProfileId: typeof parsed.modelProfileId === "string" ? parsed.modelProfileId : undefined
+    modelProfileId: typeof parsed.modelProfileId === "string" ? parsed.modelProfileId : undefined,
+    previousReasoning,
+    existingElements,
+    templateId: typeof parsed.templateId === "string" ? parsed.templateId : undefined
   };
 }
 
@@ -91,22 +112,6 @@ function addAlias(aliasMap: Map<string, string>, alias: string, id: string): voi
   }
 }
 
-function resolveNodeRef(raw: string, aliasMap: Map<string, string>, nodeIdSet: Set<string>): string | null {
-  const key = raw.trim().toLowerCase();
-  if (!key) {
-    return null;
-  }
-  const direct = aliasMap.get(key);
-  if (direct && nodeIdSet.has(direct)) {
-    return direct;
-  }
-  const sanitized = sanitizeId(raw);
-  if (sanitized && nodeIdSet.has(sanitized)) {
-    return sanitized;
-  }
-  return null;
-}
-
 function normalizeNodeKind(raw: unknown): GraphNodeKind {
   if (typeof raw !== "string") {
     return "process";
@@ -124,56 +129,127 @@ function normalizeNodeKind(raw: unknown): GraphNodeKind {
   return "process";
 }
 
-function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
-  const nodesRaw = Array.isArray(payload.nodes)
-    ? payload.nodes
-    : Array.isArray(payload.steps)
-      ? payload.steps
-      : Array.isArray(payload.modules)
-        ? payload.modules
-        : [];
+function parseNodeRaw(raw: unknown, index: number): GraphNode | null {
+  if (typeof raw === "string") {
+    const id = normalizeId(raw, index);
+    return { id, title: raw };
+  }
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
 
-  const nodes: GraphNode[] = nodesRaw
-    .map((item, index) => {
-      if (typeof item === "string") {
-        const id = normalizeId(item, index);
-        return { id, title: item };
-      }
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const record = item as Record<string, unknown>;
-      const title = typeof record.title === "string" ? record.title : typeof record.name === "string" ? record.name : null;
-      if (!title) {
-        return null;
-      }
-      const rawId = typeof record.id === "string" ? record.id : title;
-      return {
-        id: normalizeId(rawId, index),
-        title,
-        kind: normalizeNodeKind(record.kind ?? record.type)
-      };
-    })
+  const record = raw as Record<string, unknown>;
+  const title = typeof record.title === "string" ? record.title : typeof record.name === "string" ? record.name : null;
+  if (!title) {
+    return null;
+  }
+
+  const rawId = typeof record.id === "string" ? record.id : title;
+  return {
+    id: normalizeId(rawId, index),
+    title,
+    subtitle: typeof record.subtitle === "string" ? record.subtitle : undefined,
+    style: typeof record.style === "string" ? record.style : undefined,
+    kind: normalizeNodeKind(record.kind ?? record.type)
+  };
+}
+
+function parseGroupRaw(raw: unknown, index: number): GraphGroup | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const title = typeof record.title === "string" ? record.title : typeof record.name === "string" ? record.name : null;
+  if (!title) {
+    return null;
+  }
+  const groupId = normalizeId(typeof record.id === "string" ? record.id : `group_${index + 1}`, index);
+
+  const nodesRaw = Array.isArray(record.nodes) ? record.nodes : [];
+  const childRaw = Array.isArray(record.children) ? record.children : [];
+
+  const nodes = nodesRaw
+    .map((node, nodeIndex) => parseNodeRaw(node, nodeIndex))
+    .filter((item): item is GraphNode => item !== null);
+  const children = childRaw
+    .map((group, childIndex) => parseGroupRaw(group, childIndex))
+    .filter((item): item is GraphGroup => item !== null);
+
+  return {
+    id: groupId,
+    title,
+    color: typeof record.color === "string" ? record.color : undefined,
+    nodes,
+    children: children.length > 0 ? children : undefined
+  };
+}
+
+function collectNodes(groups: GraphGroup[], freeNodes: GraphNode[]): GraphNode[] {
+  const all: GraphNode[] = [...freeNodes];
+  const walk = (input: GraphGroup[]) => {
+    for (const group of input) {
+      all.push(...group.nodes);
+      walk(group.children ?? []);
+    }
+  };
+  walk(groups);
+  return all;
+}
+
+function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
+  const groups = (Array.isArray(payload.groups) ? payload.groups : [])
+    .map((group, index) => parseGroupRaw(group, index))
+    .filter((item): item is GraphGroup => item !== null);
+
+  const freeNodesRaw = Array.isArray(payload.freeNodes)
+    ? payload.freeNodes
+    : Array.isArray(payload.nodes)
+      ? payload.nodes
+      : Array.isArray(payload.steps)
+        ? payload.steps
+        : Array.isArray(payload.modules)
+          ? payload.modules
+          : [];
+
+  const freeNodes = freeNodesRaw
+    .map((node, index) => parseNodeRaw(node, index))
     .filter((item): item is GraphNode => item !== null);
 
+  const nodes = collectNodes(groups, freeNodes);
   if (nodes.length === 0) {
     throw new Error("model output has no nodes");
   }
 
   const nodeIdSet = new Set(nodes.map((item) => item.id));
   const aliasMap = new Map<string, string>();
-  nodes.forEach((node) => {
+  for (const node of nodes) {
     addAlias(aliasMap, node.id, node.id);
     addAlias(aliasMap, node.title, node.id);
-    const fromId = sanitizeId(node.id);
-    if (fromId) {
-      addAlias(aliasMap, fromId, node.id);
+    const sanitizedId = sanitizeId(node.id);
+    if (sanitizedId) {
+      addAlias(aliasMap, sanitizedId, node.id);
     }
-    const fromTitle = sanitizeId(node.title);
-    if (fromTitle) {
-      addAlias(aliasMap, fromTitle, node.id);
+    const sanitizedTitle = sanitizeId(node.title);
+    if (sanitizedTitle) {
+      addAlias(aliasMap, sanitizedTitle, node.id);
     }
-  });
+  }
+
+  const resolveNodeRef = (raw: string): string | null => {
+    const key = raw.trim().toLowerCase();
+    if (!key) {
+      return null;
+    }
+    const direct = aliasMap.get(key);
+    if (direct && nodeIdSet.has(direct)) {
+      return direct;
+    }
+    const sanitized = sanitizeId(raw);
+    if (sanitized && nodeIdSet.has(sanitized)) {
+      return sanitized;
+    }
+    return null;
+  };
 
   const edgesRaw = Array.isArray(payload.edges) ? payload.edges : [];
   const edges = edgesRaw
@@ -184,27 +260,29 @@ function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
       const record = item as Record<string, unknown>;
       const fromRef = typeof record.from === "string" ? record.from : "";
       const toRef = typeof record.to === "string" ? record.to : "";
-      const from = fromRef ? resolveNodeRef(fromRef, aliasMap, nodeIdSet) : null;
-      const to = toRef ? resolveNodeRef(toRef, aliasMap, nodeIdSet) : null;
+      const from = fromRef ? resolveNodeRef(fromRef) : null;
+      const to = toRef ? resolveNodeRef(toRef) : null;
       if (!from || !to) {
         return null;
       }
       return {
         from,
         to,
-        label: typeof record.label === "string" ? record.label : undefined
+        label: typeof record.label === "string" ? record.label : undefined,
+        style: typeof record.style === "string" ? record.style : undefined
       };
     })
     .filter((item): item is GraphEdge => item !== null);
 
   if (edges.length === 0 && nodes.length > 1) {
     for (let index = 0; index < nodes.length - 1; index += 1) {
-      edges.push({ from: nodes[index].id, to: nodes[index + 1].id });
+      edges.push({ from: nodes[index].id, to: nodes[index + 1].id, style: "solid" });
     }
   }
 
   return {
-    nodes,
+    groups,
+    freeNodes,
     edges,
     reasoningSummary:
       payload.reasoningSummary && typeof payload.reasoningSummary === "object"
@@ -213,70 +291,97 @@ function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
   };
 }
 
-
-function graphToElements(graph: GraphPayload, diagramType: DiagramType): DiagramElement[] {
-  // 使用 Dagre 算法进行智能布局，失败时回退到原有算法
-  let positions: Map<string, { x: number; y: number }>;
-  try {
-    positions = layoutGraphWithDagre(graph, { diagramType });
-  } catch {
-    positions = layoutGraphFallback(graph);
+function flattenGroups(groups: GraphGroup[], parentId?: string): GroupFlatItem[] {
+  const list: GroupFlatItem[] = [];
+  for (const group of groups) {
+    list.push({ id: group.id, title: group.title, color: group.color, parentId });
+    list.push(...flattenGroups(group.children ?? [], group.id));
   }
-  const nodeElements = graph.nodes.map((node) => {
-    const pos = positions.get(node.id) ?? { x: 120, y: 100 };
-    const kind = diagramType === "module_architecture" ? "process" : node.kind ?? "process";
-    const shapeType = kind === "decision" ? "diamond" : kind === "start_end" ? "ellipse" : "rectangle";
-    const width = kind === "decision" ? 260 : 240;
-    const height = kind === "decision" ? 140 : kind === "start_end" ? 92 : 100;
-    return {
-      id: node.id,
-      type: shapeType,
-      x: pos.x,
-      y: pos.y,
-      width,
-      height,
-      text: diagramType === "module_architecture" ? `Module: ${node.title}` : node.title,
-      meta: { kind }
-    };
-  });
-
-  const edgeElements = graph.edges.map((edge, index) => ({
-    id: createId(`edge${index + 1}`),
-    type: "arrow",
-    x: 0,
-    y: 0,
-    text: edge.label ? `${edge.from}->${edge.to}:${edge.label}` : `${edge.from}->${edge.to}`,
-    meta: {
-      fromId: edge.from,
-      toId: edge.to,
-      label: edge.label ?? null
-    }
-  }));
-
-  return [...nodeElements, ...edgeElements];
+  return list;
 }
 
-function fallbackReasoningSummary(params: {
-  inputType: string;
-  diagramType: DiagramType;
-  sourceRefs: string[];
-  modelReasoning?: Record<string, unknown>;
-}) {
-  if (params.modelReasoning) {
-    return {
-      ...params.modelReasoning,
-      sources: Array.isArray(params.modelReasoning.sources)
-        ? params.modelReasoning.sources
-        : params.sourceRefs
-    };
-  }
-  return {
-    layeringReason: params.diagramType === "module_architecture" ? "按职责与依赖分层" : "按业务顺序编排",
-    keyDependencies: ["上游输入", "核心处理", "下游输出"],
-    alternatives: ["可拆分子流程", "可增加异常分支"],
-    sources: params.sourceRefs,
-    inputType: params.inputType
+function collectNodeParentMap(groups: GraphGroup[]): Map<string, string> {
+  const map = new Map<string, string>();
+  const walk = (input: GraphGroup[]) => {
+    for (const group of input) {
+      for (const node of group.nodes) {
+        map.set(node.id, group.id);
+      }
+      walk(group.children ?? []);
+    }
   };
+  walk(groups);
+  return map;
+}
+
+async function graphToElements(graph: GraphPayload, diagramType: DiagramType): Promise<DiagramElement[]> {
+  let layout;
+  try {
+    layout = await layoutGraphWithELK(graph);
+  } catch {
+    layout = layoutGraphFallback(graph);
+  }
+
+  const elements: DiagramElement[] = [];
+  const flattenedGroups = flattenGroups(graph.groups);
+  for (const group of flattenedGroups) {
+    const item = layout.groups.get(group.id);
+    elements.push({
+      id: group.id,
+      type: "group",
+      x: item?.x ?? 100,
+      y: item?.y ?? 100,
+      width: item?.width ?? 420,
+      height: item?.height ?? 280,
+      text: group.title,
+      parentId: item?.parentId ?? group.parentId,
+      style: group.color ?? "blue",
+      meta: {
+        colorKey: group.color ?? "blue"
+      }
+    });
+  }
+
+  const nodeParentMap = collectNodeParentMap(graph.groups);
+  const nodes = collectNodes(graph.groups, graph.freeNodes);
+  for (const node of nodes) {
+    const pos = layout.nodes.get(node.id) ?? { x: 120, y: 100, parentId: nodeParentMap.get(node.id) };
+    const kind = diagramType === "module_architecture" ? "process" : node.kind ?? "process";
+    elements.push({
+      id: node.id,
+      type: "step",
+      x: pos.x,
+      y: pos.y,
+      width: pos.width ?? 220,
+      height: pos.height ?? 96,
+      text: diagramType === "module_architecture" ? `Module: ${node.title}` : node.title,
+      subtitle: node.subtitle,
+      parentId: pos.parentId ?? nodeParentMap.get(node.id),
+      style: node.style ?? kind,
+      meta: {
+        kind
+      }
+    });
+  }
+
+  for (const [index, edge] of graph.edges.entries()) {
+    elements.push({
+      id: createId(`edge${index + 1}`),
+      type: "arrow",
+      x: 0,
+      y: 0,
+      text: edge.label ? `${edge.from}->${edge.to}:${edge.label}` : `${edge.from}->${edge.to}`,
+      style: edge.style ?? "solid",
+      meta: {
+        fromId: edge.from,
+        toId: edge.to,
+        label: edge.label ?? null,
+        style: edge.style ?? "solid"
+      }
+    });
+  }
+
+  return elements;
 }
 
 function summarizeElements(elements: DiagramElement[]): string {
@@ -296,134 +401,76 @@ function summarizeElements(elements: DiagramElement[]): string {
   return `Nodes:\n${nodes || "(none)"}\nEdges:\n${edges || "(none)"}`;
 }
 
-function systemPrompt(diagramType: DiagramType, mode: string): string {
+function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string {
+  const colorKeys = Object.keys(template.renderConfig.groupColors);
+  const stepKinds = template.renderConfig.stepKinds;
+  const edgeStyles = Object.keys(template.renderConfig.edgeStyles);
+
   return [
     "You are a senior diagram planner.",
-    `Task mode: ${mode}. Diagram type: ${diagramType}.`,
+    `Diagram type: ${diagramType}.`,
+    `Group color keys: ${colorKeys.join("|")}.`,
+    `Node kinds: ${stepKinds.join("|")}.`,
+    `Edge styles: ${edgeStyles.join("|")}.`,
     "Return ONLY a JSON object with this schema:",
     "{",
-    '  "nodes": [{"id":"string","title":"string","kind":"start_end|process|decision|data"}],',
-    '  "edges": [{"from":"nodeId","to":"nodeId","label":"optional"}],',
+    '  "groups": [{"id":"string","title":"string","color":"string","nodes":[{"id":"string","title":"string","subtitle":"optional","kind":"string","style":"string"}],"children":[]}],',
+    '  "freeNodes": [{"id":"string","title":"string","subtitle":"optional","kind":"string","style":"string"}],',
+    '  "edges": [{"from":"nodeId","to":"nodeId","label":"optional","style":"solid|dashed"}],',
     '  "reasoningSummary": {"layeringReason":"string","keyDependencies":["..."],"alternatives":["..."],"sources":["..."]}',
     "}",
-    "Use at least 4 nodes for flowchart unless input is extremely short.",
-    "For flowchart, include start_end nodes where appropriate.",
+    "Use groups when the content naturally has module/phase ownership.",
+    template.stylePrompt ? `Visual style guidance: ${template.stylePrompt}` : "",
     "Do not include markdown code fences."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-function userPromptForText(inputText: string): string {
-  return [
+function userPromptForText(params: {
+  inputText: string;
+  previousReasoning?: Record<string, unknown>;
+  existingElements?: DiagramElement[];
+}): string {
+  const parts = [
     "Generate a practical diagram from this requirement:",
-    inputText,
+    params.inputText,
     "Need enough steps/modules to be useful. Avoid single-node output."
-  ].join("\n");
-}
-
-function userPromptForDocument(documentText: string): string {
-  return [
-    "Generate a diagram from this document content:",
-    documentText,
-    "Extract key stages/modules and dependencies."
-  ].join("\n");
-}
-
-function userPromptForChat(instruction: string, current: DiagramElement[]): string {
-  return [
-    "Apply this incremental edit instruction and return full updated graph JSON.",
-    `Instruction: ${instruction}`,
-    "Current graph summary:",
-    summarizeElements(current),
-    "Keep unrelated parts stable and only change necessary parts."
-  ].join("\n");
-}
-
-async function buildFallbackResult(params: {
-  job: {
-    id: string;
-    jobType: string;
-    inputType: string;
-    inputText: string | null;
-    inputAssetId: string | null;
-    diagramId: string | null;
-  };
-  meta: JobMeta;
-  reason: string;
-}): Promise<{
-  elements: DiagramElement[];
-  reasoning: Record<string, unknown>;
-} | null> {
-  const { job, meta, reason } = params;
-  let elements: DiagramElement[] | null = null;
-  let sourceRefs: string[] = ["fallback_mock"];
-  let fallbackSummary: string | undefined;
-
-  if (job.jobType === "text_generate") {
-    elements = generateElementsFromText(job.inputText ?? "", meta.diagramType);
-    sourceRefs = ["text_input", "fallback_mock"];
-  }
-
-  if (job.jobType === "doc_generate") {
-    const chunks = job.inputAssetId
-      ? await prisma.docChunk.findMany({
-          where: { assetId: job.inputAssetId },
-          orderBy: { chunkIndex: "asc" },
-          take: 16
-        })
-      : [];
-    const chunkTexts = chunks.map((item) => item.content);
-    elements = generateElementsFromDocument(chunkTexts.length > 0 ? chunkTexts : [job.inputText ?? ""], meta.diagramType);
-    sourceRefs = [job.inputAssetId ?? "document_input", "doc_chunks", "fallback_mock"];
-  }
-
-  if (job.jobType === "image_generate") {
-    const asset = job.inputAssetId ? await prisma.inputAsset.findUnique({ where: { id: job.inputAssetId } }) : null;
-    elements = generateElementsFromImageHint(asset?.filename ?? "image-input", meta.diagramType);
-    sourceRefs = [asset?.id ?? "image_input", "fallback_mock"];
-  }
-
-  if (job.jobType === "chat_edit") {
-    if (!job.diagramId) {
-      return null;
-    }
-    const diagram = await prisma.diagram.findUnique({ where: { id: job.diagramId } });
-    if (!diagram) {
-      return null;
-    }
-    const current = safeJsonParse<DiagramElement[]>(diagram.elementsJson, []);
-    const patch = generateChangeSetFromInstruction(current, meta.instruction ?? job.inputText ?? "", meta.selection ?? []);
-    elements = applyChangeSet(current, patch.ops);
-    fallbackSummary = patch.summary;
-    sourceRefs = [job.diagramId, "chat_instruction", "fallback_mock"];
-  }
-
-  if (!elements || elements.length === 0) {
-    return null;
-  }
-
-  const reasoning = fallbackReasoningSummary({
-    inputType: job.inputType,
-    diagramType: meta.diagramType,
-    sourceRefs,
-    modelReasoning: {
-      layeringReason: "模型调用失败，使用本地规则兜底生成",
-      keyDependencies: ["输入内容", "规则拆分", "自动连线"],
-      alternatives: ["稍后可重试在线模型", "可改为更短输入再生成"],
-      sources: sourceRefs,
-      fallback: true,
-      fallbackReason: reason,
-      fallbackSummary: fallbackSummary ?? null
-    }
-  });
-
-  return { elements, reasoning };
-}
-
-function messageWithImage(prompt: string, dataUrl: string): Array<Record<string, unknown>> {
-  return [
-    { type: "text", text: prompt },
-    { type: "image_url", image_url: { url: dataUrl } }
   ];
+
+  if (params.previousReasoning) {
+    parts.push("Previous reasoning summary:");
+    parts.push(JSON.stringify(params.previousReasoning));
+  }
+
+  if (params.existingElements && params.existingElements.length > 0) {
+    parts.push("Current diagram (for incremental optimization):");
+    parts.push(summarizeElements(params.existingElements));
+    parts.push("Preserve stable structure and only change necessary parts.");
+  }
+
+  return parts.join("\n");
+}
+
+function fallbackReasoningSummary(params: {
+  inputType: string;
+  diagramType: DiagramType;
+  sourceRefs: string[];
+  modelReasoning?: Record<string, unknown>;
+}): Record<string, unknown> {
+  if (params.modelReasoning) {
+    return {
+      ...params.modelReasoning,
+      sources: Array.isArray(params.modelReasoning.sources) ? params.modelReasoning.sources : params.sourceRefs
+    };
+  }
+  return {
+    layeringReason: params.diagramType === "module_architecture" ? "按职责与依赖分层" : "按业务顺序编排",
+    keyDependencies: ["上游输入", "核心处理", "下游输出"],
+    alternatives: ["可拆分子流程", "可增加异常分支"],
+    sources: params.sourceRefs,
+    inputType: params.inputType
+  };
 }
 
 async function resolveModelProfile(job: {
@@ -461,10 +508,71 @@ async function resolveModelProfile(job: {
   throw new Error("no_available_model_profile");
 }
 
-async function loadImageAsDataUrl(assetPath: string, mimeType: string): Promise<string> {
-  const file = await fs.readFile(assetPath);
-  const base64 = file.toString("base64");
-  return `data:${mimeType};base64,${base64}`;
+async function loadTemplateInfo(templateId?: string): Promise<TemplateInfo> {
+  const byId = templateId ? await prisma.template.findUnique({ where: { id: templateId } }) : null;
+  const defaultTemplate =
+    byId ??
+    (await prisma.template.findFirst({
+      where: { category: "style" },
+      orderBy: [{ isBuiltin: "desc" }, { createdAt: "desc" }]
+    }));
+
+  if (!defaultTemplate) {
+    return {
+      id: "default",
+      name: "default",
+      stylePrompt: null,
+      renderConfig: DEFAULT_RENDER_CONFIG
+    };
+  }
+
+  const parsed = safeJsonParse<unknown>(defaultTemplate.renderConfigJson, DEFAULT_RENDER_CONFIG);
+  const renderConfig =
+    parsed &&
+    typeof parsed === "object" &&
+    "groupColors" in parsed &&
+    "stepKinds" in parsed &&
+    "stepShapes" in parsed &&
+    "edgeStyles" in parsed &&
+    "canvas" in parsed
+      ? (parsed as RenderConfig)
+      : DEFAULT_RENDER_CONFIG;
+
+  return {
+    id: defaultTemplate.id,
+    name: defaultTemplate.name,
+    stylePrompt: defaultTemplate.stylePrompt,
+    renderConfig
+  };
+}
+
+async function buildFallbackResult(params: {
+  inputText: string;
+  diagramType: DiagramType;
+  reason: string;
+}): Promise<{ elements: DiagramElement[]; reasoning: Record<string, unknown> } | null> {
+  const inputText = params.inputText.trim();
+  if (!inputText) {
+    return null;
+  }
+
+  const elements = generateElementsFromText(inputText, params.diagramType);
+  if (elements.length === 0) {
+    return null;
+  }
+
+  const cleanReason = cleanControlChars(params.reason);
+  const reasoning = {
+    ...generateReasoningSummary({
+      diagramType: params.diagramType,
+      sourceRefs: ["text_input", "fallback_mock"],
+      fallbackReason: cleanReason
+    }),
+    fallback: true,
+    fallbackReason: cleanReason
+  };
+
+  return { elements, reasoning };
 }
 
 async function runGenerationJob(jobId: string): Promise<void> {
@@ -490,62 +598,19 @@ async function runGenerationJob(jobId: string): Promise<void> {
       throw new Error("model_profile_api_key_missing");
     }
 
-    let messages: Message[] = [{ role: "system", content: systemPrompt(meta.diagramType, job.inputType) }];
-    let sourceRefs: string[] = [];
+    const template = await loadTemplateInfo(meta.templateId ?? job.templateId ?? undefined);
 
-    if (job.jobType === "text_generate") {
-      messages.push({ role: "user", content: userPromptForText(job.inputText ?? "") });
-      sourceRefs = ["text_input"];
-    }
-
-    if (job.jobType === "doc_generate") {
-      if (!job.inputAssetId) {
-        throw new Error("doc_generate job missing inputAssetId");
-      }
-      const chunks = await prisma.docChunk.findMany({
-        where: { assetId: job.inputAssetId },
-        orderBy: { chunkIndex: "asc" },
-        take: 16
-      });
-      const text = chunks.map((item) => item.content).join("\n\n");
-      messages.push({ role: "user", content: userPromptForDocument(text || (job.inputText ?? "")) });
-      sourceRefs = [job.inputAssetId, "doc_chunks"];
-    }
-
-    if (job.jobType === "image_generate") {
-      if (!job.inputAssetId) {
-        throw new Error("image_generate job missing inputAssetId");
-      }
-      const asset = await prisma.inputAsset.findUnique({ where: { id: job.inputAssetId } });
-      if (!asset) {
-        throw new Error("image asset not found");
-      }
-      const dataUrl = await loadImageAsDataUrl(asset.storagePath, asset.mimeType);
-      messages.push({
+    const messages: Message[] = [
+      { role: "system", content: systemPrompt(meta.diagramType, template) },
+      {
         role: "user",
-        content: messageWithImage(
-          "Recognize this diagram image and convert it into editable nodes and directed edges.",
-          dataUrl
-        )
-      });
-      sourceRefs = [asset.id, "image_input"];
-    }
-
-    if (job.jobType === "chat_edit") {
-      if (!job.diagramId) {
-        throw new Error("chat_edit job missing diagramId");
+        content: userPromptForText({
+          inputText: job.inputText ?? "",
+          previousReasoning: meta.previousReasoning,
+          existingElements: meta.existingElements
+        })
       }
-      const diagram = await prisma.diagram.findUnique({ where: { id: job.diagramId } });
-      if (!diagram) {
-        throw new Error("diagram not found");
-      }
-      const current = safeJsonParse<DiagramElement[]>(diagram.elementsJson, []);
-      messages.push({
-        role: "user",
-        content: userPromptForChat(meta.instruction ?? job.inputText ?? "", current)
-      });
-      sourceRefs = [job.diagramId, "chat_instruction"];
-    }
+    ];
 
     const modelJson = await requestJsonFromModel({
       profile: {
@@ -561,13 +626,16 @@ async function runGenerationJob(jobId: string): Promise<void> {
     });
 
     const graph = toGraphPayload(modelJson);
-    const elements = graphToElements(graph, meta.diagramType);
-    const reasoning = fallbackReasoningSummary({
-      inputType: job.inputType,
-      diagramType: meta.diagramType,
-      sourceRefs,
-      modelReasoning: graph.reasoningSummary
-    });
+    const elements = await graphToElements(graph, meta.diagramType);
+    const reasoning = {
+      ...fallbackReasoningSummary({
+        inputType: "text",
+        diagramType: meta.diagramType,
+        sourceRefs: ["text_input"],
+        modelReasoning: graph.reasoningSummary
+      }),
+      fallback: false
+    };
 
     await prisma.generationJob.update({
       where: { id: job.id },
@@ -576,24 +644,20 @@ async function runGenerationJob(jobId: string): Promise<void> {
         provider: profile.provider,
         model: profile.model,
         resultElementsJson: asJsonString(elements),
-        reasoningSummaryJson: asJsonString(reasoning)
+        reasoningSummaryJson: asJsonString(reasoning),
+        errorMessage: null
       }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown worker error";
     const meta = parseJobMeta(job.irJson);
+
     const fallback = await buildFallbackResult({
-      job: {
-        id: job.id,
-        jobType: job.jobType,
-        inputType: job.inputType,
-        inputText: job.inputText,
-        inputAssetId: job.inputAssetId,
-        diagramId: job.diagramId
-      },
-      meta,
+      inputText: job.inputText ?? "",
+      diagramType: meta.diagramType,
       reason: message
     });
+
     if (fallback) {
       await prisma.generationJob.update({
         where: { id: job.id },
@@ -613,7 +677,7 @@ async function runGenerationJob(jobId: string): Promise<void> {
         data: {
           status: "pending",
           retryCount: job.retryCount + 1,
-          errorMessage: message
+          errorMessage: cleanControlChars(message)
         }
       });
       queueGenerationJob(job.id, 800);
@@ -624,7 +688,7 @@ async function runGenerationJob(jobId: string): Promise<void> {
       where: { id: job.id },
       data: {
         status: "failed",
-        errorMessage: message
+        errorMessage: cleanControlChars(message)
       }
     });
   }

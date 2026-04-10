@@ -47,6 +47,7 @@ model DiagramRevision {
 model GenerationJob {
   id                   String   @id
   diagramId            String?  @map("diagram_id")
+  templateId           String?  @map("template_id")
   jobType              String   @map("job_type")
   status               String
   inputText            String?  @map("input_text")
@@ -62,10 +63,12 @@ model GenerationJob {
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
-  diagram Diagram? @relation(fields: [diagramId], references: [id], onDelete: SetNull)
+  diagram   Diagram?  @relation(fields: [diagramId], references: [id], onDelete: SetNull)
+  template  Template? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt(sort: Desc)])
   @@index([jobType, provider, model])
+  @@index([diagramId, createdAt(sort: Desc)])
   @@map("generation_jobs")
 }
 
@@ -154,13 +157,17 @@ model DiagramChangeSet {
 }
 
 model Template {
-  id          String   @id
-  name        String
-  category    String
-  diagramType String   @map("diagram_type")
-  templateJson String  @map("template_json")
-  isBuiltin   Boolean  @default(true) @map("is_builtin")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id               String          @id
+  name             String
+  category         String
+  diagramType      String          @map("diagram_type")
+  templateJson     String          @map("template_json")
+  stylePrompt      String?         @map("style_prompt")
+  renderConfigJson String?         @map("render_config_json")
+  previewImagePath String?         @map("preview_image_path")
+  isBuiltin        Boolean         @default(true) @map("is_builtin")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  generationJobs   GenerationJob[]
 
   @@index([category, diagramType])
   @@map("templates")

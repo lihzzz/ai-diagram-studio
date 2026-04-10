@@ -1,8 +1,31 @@
 import { PrismaClient } from "@prisma/client";
+import { DEFAULT_RENDER_CONFIG, MINIMAL_LIGHT_RENDER_CONFIG } from "@ai-diagram-studio/shared";
 
 const prisma = new PrismaClient();
 
 const builtinTemplates = [
+  {
+    id: "tpl_default_style",
+    name: "默认风格",
+    category: "style",
+    diagramType: "flowchart",
+    templateJson: {
+      version: 1
+    },
+    stylePrompt: "Use a clean modern style with balanced spacing, clear hierarchy, and readable labels.",
+    renderConfigJson: DEFAULT_RENDER_CONFIG
+  },
+  {
+    id: "tpl_minimal_light_style",
+    name: "极简浅色",
+    category: "style",
+    diagramType: "flowchart",
+    templateJson: {
+      version: 1
+    },
+    stylePrompt: "Apple-style minimal design: light gray (#F8F8F8) background, soft rounded corners, muted gray (#B0B0B0) edges, subtle grid, low contrast, clean and airy like macOS document icons.",
+    renderConfigJson: MINIMAL_LIGHT_RENDER_CONFIG
+  },
   {
     id: "tpl_three_layer",
     name: "通用三层架构",
@@ -30,7 +53,9 @@ const builtinTemplates = [
           meta: { fromId: "n2", toId: "n3" }
         }
       ]
-    }
+    },
+    stylePrompt: null,
+    renderConfigJson: null
   },
   {
     id: "tpl_order_flow",
@@ -59,7 +84,9 @@ const builtinTemplates = [
           meta: { fromId: "f2", toId: "f3" }
         }
       ]
-    }
+    },
+    stylePrompt: null,
+    renderConfigJson: null
   }
 ];
 
@@ -79,6 +106,9 @@ async function main(): Promise<void> {
         category: template.category,
         diagramType: template.diagramType,
         templateJson: JSON.stringify(template.templateJson),
+        stylePrompt: template.stylePrompt,
+        renderConfigJson: template.renderConfigJson ? JSON.stringify(template.renderConfigJson) : null,
+        previewImagePath: null,
         isBuiltin: true
       },
       create: {
@@ -87,6 +117,9 @@ async function main(): Promise<void> {
         category: template.category,
         diagramType: template.diagramType,
         templateJson: JSON.stringify(template.templateJson),
+        stylePrompt: template.stylePrompt,
+        renderConfigJson: template.renderConfigJson ? JSON.stringify(template.renderConfigJson) : null,
+        previewImagePath: null,
         isBuiltin: true
       }
     });

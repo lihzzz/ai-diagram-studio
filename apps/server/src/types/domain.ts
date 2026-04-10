@@ -9,5 +9,8 @@ export type DiagramElement = {
   height?: number;
   text?: string;
   groupId?: string;
+  parentId?: string;
+  subtitle?: string;
+  style?: string;
   meta?: Record<string, unknown>;
 };

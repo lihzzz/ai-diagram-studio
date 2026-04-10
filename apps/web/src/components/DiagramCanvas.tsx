@@ -1,279 +1,286 @@
-import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Excalidraw } from "@excalidraw/excalidraw";
+import { forwardRef, useEffect, useImperativeHandle, useCallback, useMemo, useRef, useState } from "react";
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  Background,
+  Controls,
+  getNodesBounds,
+  getViewportForBounds,
+  MiniMap,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Connection,
+  type EdgeChange,
+  type NodeChange
+} from "@xyflow/react";
+import { toPng, toSvg } from "html-to-image";
+import { DEFAULT_RENDER_CONFIG, type RenderConfig } from "@ai-diagram-studio/shared";
+import "@xyflow/react/dist/style.css";
 
 import type { DiagramElement } from "../types";
-import { fromExcalidrawElements, toExcalidrawElements } from "../utils/excalidraw-adapter";
-
-type ExcalidrawElementLike = {
-  id: string;
-  type: string;
-  isDeleted?: boolean;
-};
-
-type ExcalidrawAppStateLike = {
-  selectedElementIds?: Record<string, boolean>;
-};
-
-type ExcalidrawApiLike = {
-  updateScene: (scene: { elements?: readonly ExcalidrawElementLike[]; appState?: ExcalidrawAppStateLike }) => void;
-  scrollToContent?: (target?: readonly ExcalidrawElementLike[]) => void;
-  getAppState?: () => ExcalidrawAppStateLike;
-  getSceneElements?: () => readonly ExcalidrawElementLike[];
-  getSceneElementsIncludingDeleted?: () => readonly ExcalidrawElementLike[];
-};
+import { downloadDataUrl, downloadText, elementsToJson } from "../utils/export-canvas";
+import { fromReactFlowElements, toReactFlowElements, type ReactFlowEdge, type ReactFlowNode } from "../utils/reactflow-adapter";
+import { RenderConfigProvider } from "../contexts/RenderConfigContext";
+import { GroupNode } from "./flow-nodes/GroupNode";
+import { StepNode } from "./flow-nodes/StepNode";
+import { LabeledEdge } from "./flow-edges/LabeledEdge";
 
 type DiagramCanvasProps = {
   elements: DiagramElement[];
   selection: string[];
+  renderConfig?: RenderConfig;
   readOnly?: boolean;
+  saving?: boolean;
+  onSave?: () => Promise<void>;
   onSelect: (ids: string[]) => void;
   onElementsChange?: (elements: DiagramElement[]) => void;
 };
 
-type CanvasErrorBoundaryState = {
-  error: string | null;
+export type DiagramCanvasHandle = {
+  getExportOptions: () => {
+    bounds: { x: number; y: number; width: number; height: number };
+    viewport: { x: number; y: number; zoom: number };
+  };
 };
 
-class CanvasErrorBoundary extends Component<{ children: ReactNode }, CanvasErrorBoundaryState> {
-  state: CanvasErrorBoundaryState = { error: null };
+const nodeTypes = {
+  group: GroupNode,
+  step: StepNode
+};
 
-  static getDerivedStateFromError(error: Error): CanvasErrorBoundaryState {
-    return { error: error.message };
-  }
+const edgeTypes = {
+  labeled: LabeledEdge
+};
 
-  render() {
-    if (this.state.error) {
-      return <div className="error-inline">画布渲染失败: {this.state.error}</div>;
-    }
-    return this.props.children;
-  }
-}
+type CanvasBodyProps = {
+  elements: DiagramElement[];
+  selection: string[];
+  renderConfig: RenderConfig;
+  readOnly: boolean;
+  saving: boolean;
+  onSave?: () => Promise<void>;
+  onSelect: (ids: string[]) => void;
+  onElementsChange?: (elements: DiagramElement[]) => void;
+  hostRef: React.MutableRefObject<HTMLDivElement | null>;
+  exposeHandle: (handle: DiagramCanvasHandle) => void;
+};
 
-function sortObjectKeys(value: Record<string, unknown> | undefined): Record<string, unknown> | null {
-  if (!value) {
-    return null;
-  }
-  const sortedKeys = Object.keys(value).sort((a, b) => a.localeCompare(b));
-  const result: Record<string, unknown> = {};
-  for (const key of sortedKeys) {
-    result[key] = value[key];
-  }
-  return result;
-}
+function CanvasBody({
+  elements,
+  selection,
+  renderConfig,
+  readOnly,
+  saving,
+  onSave,
+  onSelect,
+  onElementsChange,
+  hostRef,
+  exposeHandle
+}: CanvasBodyProps) {
+  const flow = useReactFlow();
+  const [nodes, setNodes] = useState<ReactFlowNode[]>([]);
+  const [edges, setEdges] = useState<ReactFlowEdge[]>([]);
+  const syncingRef = useRef(false);
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
 
-function elementSignature(elements: DiagramElement[]): string {
-  const normalized = [...elements]
-    .map((item) => ({
-      id: item.id,
-      type: item.type,
-      x: Math.round(item.x),
-      y: Math.round(item.y),
-      width: item.width ?? null,
-      height: item.height ?? null,
-      text: item.text ?? null,
-      groupId: item.groupId ?? null,
-      meta: sortObjectKeys(item.meta)
-    }))
-    .sort((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify(normalized);
-}
-
-export function DiagramCanvas({ elements, selection, readOnly = false, onSelect, onElementsChange }: DiagramCanvasProps) {
-  const excalidrawElements = useMemo(() => toExcalidrawElements(elements), [elements]);
-  const apiRef = useRef<ExcalidrawApiLike | null>(null);
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const syncingSceneRef = useRef(false);
-  const lastAppliedSignatureRef = useRef<string>("");
-  const selectionRef = useRef<string[]>([]);
-  const incomingElementsRef = useRef(elements);
-  const [refreshingAnchors, setRefreshingAnchors] = useState(false);
-  const incomingSignature = useMemo(() => elementSignature(elements), [elements]);
+  const adapterResult = useMemo(() => toReactFlowElements(elements), [elements]);
 
   useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
-
-  useEffect(() => {
-    incomingElementsRef.current = elements;
-  }, [elements]);
-
-  const refreshArrowAnchors = async () => {
-    if (readOnly || !onElementsChange || refreshingAnchors) {
-      return;
-    }
-    const api = apiRef.current;
-    if (!api) {
-      return;
-    }
-    const allSceneElements = (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements?.() ?? []).filter(
-      (item) => !item.isDeleted
-    );
-    const movableIds = allSceneElements
-      .filter((item) => item.type !== "arrow" && item.type !== "text")
-      .map((item) => item.id);
-    if (movableIds.length === 0) {
-      return;
-    }
-
-    const container = hostRef.current?.querySelector(".excalidraw") as HTMLElement | null;
-    if (!container) {
-      return;
-    }
-
-    setRefreshingAnchors(true);
-    syncingSceneRef.current = true;
-    try {
-      const previousSelected = Object.entries(api.getAppState?.().selectedElementIds ?? {})
-        .filter(([, checked]) => checked)
-        .map(([id]) => id)
-        .sort((a, b) => a.localeCompare(b));
-
-      const allSelectedMap: Record<string, boolean> = {};
-      for (const id of movableIds) {
-        allSelectedMap[id] = true;
-      }
-      api.updateScene({ appState: { selectedElementIds: allSelectedMap } });
-      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
-
-      const keyboardTarget = (hostRef.current?.querySelector(".excalidraw") as HTMLElement | null) ?? container;
-      keyboardTarget.focus();
-      const fireKey = (key: string) => {
-        keyboardTarget.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-        keyboardTarget.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
-        document.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
-      };
-
-      fireKey("ArrowRight");
-      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
-      fireKey("ArrowLeft");
-      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
-
-      const restoreSelectedMap: Record<string, boolean> = {};
-      for (const id of previousSelected) {
-        restoreSelectedMap[id] = true;
-      }
-      api.updateScene({ appState: { selectedElementIds: restoreSelectedMap } });
-      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
-
-      const latestSceneElements = api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements?.() ?? [];
-      const normalized = fromExcalidrawElements(latestSceneElements as unknown as readonly unknown[]);
-      const nextSignature = elementSignature(normalized);
-      lastAppliedSignatureRef.current = nextSignature;
-      selectionRef.current = previousSelected;
-      onSelect(previousSelected);
-      onElementsChange(normalized);
-    } finally {
-      window.setTimeout(() => {
-        syncingSceneRef.current = false;
-        setRefreshingAnchors(false);
-      }, 0);
-    }
-  };
-
-  const syncScene = (nextElements: readonly ExcalidrawElementLike[], signature: string) => {
-    if (!apiRef.current) {
-      return;
-    }
-    syncingSceneRef.current = true;
-    apiRef.current.updateScene({ elements: nextElements });
-    apiRef.current.scrollToContent?.(nextElements.filter((item) => !item.isDeleted));
-    lastAppliedSignatureRef.current = signature;
+    syncingRef.current = true;
+    setNodes(adapterResult.nodes);
+    setEdges(adapterResult.edges);
     const timer = window.setTimeout(() => {
-      syncingSceneRef.current = false;
+      syncingRef.current = false;
     }, 0);
     return () => window.clearTimeout(timer);
+  }, [adapterResult.edges, adapterResult.nodes]);
+
+  useEffect(() => {
+    const selectedNodeIds = new Set(selection);
+    setNodes((state) =>
+      state.map((node) => ({
+        ...node,
+        selected: selectedNodeIds.has(node.id)
+      }))
+    );
+  }, [selection]);
+
+  const emitElements = useCallback((nextNodes: ReactFlowNode[], nextEdges: ReactFlowEdge[]) => {
+    if (readOnly || !onElementsChange || syncingRef.current) return;
+    onElementsChange(fromReactFlowElements(nextNodes, nextEdges));
+  }, [readOnly, onElementsChange]);
+
+  const onNodesChange = useCallback((changes: NodeChange<ReactFlowNode>[]) => {
+    setNodes((state) => {
+      const next = applyNodeChanges(changes, state);
+      emitElements(next, edgesRef.current);
+      return next;
+    });
+  }, [emitElements]);
+
+  const onEdgesChange = useCallback((changes: EdgeChange<ReactFlowEdge>[]) => {
+    setEdges((state) => {
+      const next = applyEdgeChanges(changes, state);
+      emitElements(nodesRef.current, next);
+      return next;
+    });
+  }, [emitElements]);
+
+  const onConnect = useCallback((connection: Connection) => {
+    if (readOnly) return;
+    const nextEdge: ReactFlowEdge = {
+      id: `edge_${Date.now()}`,
+      source: connection.source ?? "",
+      target: connection.target ?? "",
+      sourceHandle: connection.sourceHandle ?? null,
+      targetHandle: connection.targetHandle ?? null,
+      type: "labeled",
+      data: { style: "solid" }
+    };
+    setEdges((state) => {
+      const next = addEdge(nextEdge, state);
+      emitElements(nodesRef.current, next);
+      return next;
+    });
+  }, [readOnly, emitElements]);
+
+  const handleSelectionChange = useCallback((payload: { nodes: ReactFlowNode[]; edges: ReactFlowEdge[] }) => {
+    const ids = [...payload.nodes.map((node) => node.id), ...payload.edges.map((edge) => edge.id)];
+    onSelect(ids);
+  }, [onSelect]);
+
+  const getExportOptions = () => {
+    const targetNodes = flow.getNodes();
+    const bounds = getNodesBounds(targetNodes);
+    const viewport = getViewportForBounds(bounds, 1920, 1080, 0.25, 2, 0.1);
+    return { bounds, viewport };
   };
 
   useEffect(() => {
-    if (!apiRef.current) {
-      return;
-    }
-    if (lastAppliedSignatureRef.current === incomingSignature) {
-      return;
-    }
-    return syncScene(excalidrawElements as unknown as readonly ExcalidrawElementLike[], incomingSignature);
-  }, [excalidrawElements, incomingSignature]);
+    exposeHandle({ getExportOptions });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 组件挂载时强制同步一次，处理重新挂载后数据已存在的情况
-  useEffect(() => {
-    if (!apiRef.current) {
-      return;
+  const exportImage = async (format: "png" | "svg") => {
+    const pane = hostRef.current?.querySelector(".react-flow__viewport") as HTMLElement | null;
+    if (!pane) return;
+
+    const previousViewport = flow.getViewport();
+    const { viewport } = getExportOptions();
+    await flow.setViewport(viewport, { duration: 0 });
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+
+    try {
+      if (format === "png") {
+        const dataUrl = await toPng(pane, { pixelRatio: 2, backgroundColor: renderConfig.canvas.background });
+        await downloadDataUrl(dataUrl, "diagram.png");
+      } else {
+        const dataUrl = await toSvg(pane, { backgroundColor: renderConfig.canvas.background });
+        await downloadDataUrl(dataUrl, "diagram.svg");
+      }
+    } finally {
+      await flow.setViewport(previousViewport, { duration: 0 });
     }
-    const currentElements = incomingElementsRef.current;
-    const signature = elementSignature(currentElements);
-    if (lastAppliedSignatureRef.current !== signature) {
-      const excalElements = toExcalidrawElements(currentElements) as unknown as readonly ExcalidrawElementLike[];
-      syncScene(excalElements, signature);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  };
+
+  const exportJson = async () => {
+    const json = elementsToJson(fromReactFlowElements(nodes, edges));
+    await downloadText(json, "diagram.json");
+  };
 
   return (
-    <div className="canvas">
-      <div className="canvas-toolbar">
-        <span>Canvas (Excalidraw)</span>
-        {!readOnly && onElementsChange ? (
-          <button type="button" onClick={() => void refreshArrowAnchors()} disabled={refreshingAnchors}>
-            {refreshingAnchors ? "刷新中..." : "刷新箭头锚点"}
-          </button>
-        ) : null}
+    <div className="ed-canvas" ref={hostRef}>
+      <div className="ed-canvas-toolbar">
+        <span className="ed-canvas-label">Canvas</span>
+        <div className="ed-canvas-toolbar-actions">
+          {onSave ? (
+            <button type="button" className="ed-canvas-save-btn" onClick={() => void onSave()} disabled={Boolean(saving)}>
+              {saving ? "保存中..." : "保存"}
+            </button>
+          ) : null}
+          <button type="button" onClick={() => void exportImage("png")}>PNG</button>
+          <button type="button" onClick={() => void exportImage("svg")}>SVG</button>
+          <button type="button" onClick={() => void exportJson()}>JSON</button>
+        </div>
       </div>
-      <div className="excalidraw-host" ref={hostRef}>
-        <CanvasErrorBoundary>
-          <Excalidraw
-            excalidrawAPI={(nextApi) => {
-              apiRef.current = nextApi as unknown as ExcalidrawApiLike;
-              // 使用最新的 elements，而不是闭包中捕获的旧值
-              const latestElements = incomingElementsRef.current;
-              const initialElements = toExcalidrawElements(latestElements) as unknown as readonly ExcalidrawElementLike[];
-              const signature = elementSignature(latestElements);
-              if (lastAppliedSignatureRef.current !== signature) {
-                syncScene(initialElements, signature);
-              }
-            }}
-            initialData={{
-              elements: excalidrawElements as unknown as any[],
-              appState: {
-                theme: "dark"
-              }
-            }}
-            theme="dark"
-            viewModeEnabled={readOnly}
-            onChange={(nextElements: readonly ExcalidrawElementLike[], appState: ExcalidrawAppStateLike) => {
-              if (syncingSceneRef.current) {
-                return;
-              }
-              const textIdSet = new Set(nextElements.filter((item) => item.type === "text").map((item) => item.id));
-              const selected = Object.entries(appState.selectedElementIds ?? {})
-                .filter(([, checked]) => checked)
-                .map(([id]) => id)
-                .filter((id) => !textIdSet.has(id))
-                .sort((a, b) => a.localeCompare(b));
-              const prevSelected = [...selectionRef.current].sort((a, b) => a.localeCompare(b));
-              const sameSelection =
-                selected.length === prevSelected.length && selected.every((value, index) => value === prevSelected[index]);
-              if (!sameSelection) {
-                selectionRef.current = selected;
-                onSelect(selected);
-              }
 
-              if (!readOnly && onElementsChange) {
-                const normalized = fromExcalidrawElements(nextElements as unknown as readonly unknown[]);
-                const activeSceneCount = nextElements.filter((item) => !item.isDeleted).length;
-                if (normalized.length === 0 && incomingElementsRef.current.length > 0 && activeSceneCount === 0) {
-                  return;
-                }
-                const nextSignature = elementSignature(normalized);
-                if (nextSignature === incomingSignature) {
-                  return;
-                }
-                lastAppliedSignatureRef.current = nextSignature;
-                onElementsChange(normalized);
-              }
-            }}
-          />
-        </CanvasErrorBoundary>
-      </div>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        fitView
+        minZoom={0.2}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        nodeTypes={nodeTypes as never}
+        edgeTypes={edgeTypes as never}
+        nodesConnectable={!readOnly}
+        nodesDraggable={!readOnly}
+        elementsSelectable
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onSelectionChange={handleSelectionChange}
+        defaultEdgeOptions={{
+          type: "labeled",
+          style: {
+            stroke: renderConfig.canvas.edgeColor,
+            strokeWidth: 2
+          }
+        }}
+      >
+        <Background color={renderConfig.canvas.gridColor} gap={24} />
+        <MiniMap zoomable pannable style={{ background: `${renderConfig.canvas.background}88` }} />
+        <Controls />
+      </ReactFlow>
     </div>
   );
 }
+
+export const DiagramCanvas = forwardRef<DiagramCanvasHandle, DiagramCanvasProps>(function DiagramCanvas(
+  {
+    elements,
+    selection,
+    renderConfig = DEFAULT_RENDER_CONFIG,
+    readOnly = false,
+    saving = false,
+    onSave,
+    onSelect,
+    onElementsChange
+  },
+  ref
+) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const handleRef = useRef<DiagramCanvasHandle>({
+    getExportOptions: () => ({
+      bounds: { x: 0, y: 0, width: 0, height: 0 },
+      viewport: { x: 0, y: 0, zoom: 1 }
+    })
+  });
+
+  useImperativeHandle(ref, () => handleRef.current, []);
+
+  return (
+    <RenderConfigProvider config={renderConfig}>
+      <ReactFlowProvider>
+        <CanvasBody
+          elements={elements}
+          selection={selection}
+          renderConfig={renderConfig}
+          readOnly={readOnly}
+          saving={saving}
+          onSave={onSave}
+          onSelect={onSelect}
+          onElementsChange={onElementsChange}
+          hostRef={hostRef}
+          exposeHandle={(handle) => {
+            handleRef.current = handle;
+          }}
+        />
+      </ReactFlowProvider>
+    </RenderConfigProvider>
+  );
+});

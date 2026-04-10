@@ -7,6 +7,9 @@ export type DiagramElement = {
   height?: number;
   text?: string;
   groupId?: string;
+  parentId?: string;
+  subtitle?: string;
+  style?: string;
   meta?: Record<string, unknown>;
 };
 
@@ -28,4 +31,18 @@ export type GenerationJobResult = {
   result: DiagramElement[] | null;
   reasoningSummary: Record<string, unknown> | null;
   error: string | null;
+};
+
+export type GenerationJobSummary = {
+  id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  jobType: string;
+  inputType: string;
+  provider: string | null;
+  model: string | null;
+  templateId: string | null;
+  diagramType: "flowchart" | "module_architecture";
+  reasoningSummary: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
 };
