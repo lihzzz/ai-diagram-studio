@@ -5,8 +5,6 @@ import { api } from "../api/client";
 import { DiagramCanvas, type DiagramCanvasHandle } from "../components/DiagramCanvas";
 import { ReasoningPanel } from "../components/ReasoningPanel";
 import { ModelSettingsPanel } from "../components/ModelSettingsPanel";
-import { TemplateIconPanel } from "../components/TemplateIconPanel";
-import { useCatalogStore } from "../stores/catalogStore";
 import { useEditorStore } from "../stores/editorStore";
 import { useJobStore } from "../stores/jobStore";
 import { useModelStore } from "../stores/modelStore";
@@ -34,39 +32,26 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     clearAll,
     reset: resetJob
   } = useJobStore();
-  const { styleTemplates, activeStyleTemplateId, setStyleTemplates, setActiveStyleTemplateId } = useCatalogStore();
   const { profiles, setProfiles } = useModelStore();
 
   const canvasRef = useRef<DiagramCanvasHandle | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [layouting, setLayouting] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
-  const [rightTab, setRightTab] = useState<"ai" | "templates" | "settings">("ai");
+  const [rightTab, setRightTab] = useState<"ai" | "settings">("ai");
 
   const hasPreview = useMemo(() => Boolean(activeJobId && previewElements && previewElements.length > 0), [activeJobId, previewElements]);
-
-  const activeRenderConfig = useMemo(() => {
-    const selected = styleTemplates.find((template) => template.id === activeStyleTemplateId);
-    return selected?.renderConfig ?? DEFAULT_RENDER_CONFIG;
-  }, [styleTemplates, activeStyleTemplateId]);
+  const activeRenderConfig = DEFAULT_RENDER_CONFIG;
 
   const refreshMeta = async () => {
     if (!currentDiagram) return;
-    const [templates, nextProfiles, jobs] = await Promise.all([
-      api.listStyleTemplates(),
+    const [nextProfiles, jobs] = await Promise.all([
       api.listModelProfiles(),
       api.listDiagramJobs(currentDiagram.id)
     ]);
-    setStyleTemplates(templates);
     setProfiles(nextProfiles);
     setHistory(jobs);
-
-    if (!activeStyleTemplateId && templates.length > 0) {
-      const builtinDefault = templates.find((item) => item.isBuiltin) ?? templates[0];
-      setActiveStyleTemplateId(builtinDefault.id);
-    } else if (activeStyleTemplateId && !templates.some((item) => item.id === activeStyleTemplateId)) {
-      setActiveStyleTemplateId(null);
-    }
 
     if (!reasoningSummary) {
       const latestSummary = jobs.find((job) => Boolean(job.reasoningSummary))?.reasoningSummary ?? null;
@@ -119,13 +104,17 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
       await refreshMeta();
       resetJob();
       setResult({ status: "succeeded", progress: 100, previewElements: null, reasoningSummary: result.reasoningSummary, error: null });
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => resolve(undefined));
+      });
+      await triggerAutoLayout();
     } catch (error) {
       const message = error instanceof Error ? error.message : "自动应用失败";
       setResult({ status: "succeeded", progress: 100, previewElements: result.result, reasoningSummary: result.reasoningSummary, error: `自动应用失败: ${message}` });
     }
   };
 
-  const runGeneration = async (body: { mode: "text"; diagramType: "flowchart" | "module_architecture"; inputText: string; templateId?: string; previousReasoning?: Record<string, unknown>; existingElements?: typeof elements }) => {
+  const runGeneration = async (body: { mode: "text"; diagramType: "flowchart" | "module_architecture"; inputText: string; previousReasoning?: Record<string, unknown>; existingElements?: typeof elements }) => {
     if (!currentDiagram) return;
     try {
       const diagramId = currentDiagram.id;
@@ -144,7 +133,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
   const handleRunText = async (inputText: string, diagramType: "flowchart" | "module_architecture") => {
     setLastInputText(inputText);
     const payload: Parameters<typeof runGeneration>[0] = { mode: "text", diagramType, inputText };
-    if (activeStyleTemplateId) payload.templateId = activeStyleTemplateId;
     if (reasoningSummary && elements.length > 0) {
       payload.previousReasoning = reasoningSummary;
       payload.existingElements = elements;
@@ -190,31 +178,23 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
     return { available: result.available, reason: result.reason, httpStatus: result.httpStatus, latencyMs: result.latencyMs };
   };
 
-  const uploadStyleTemplate = async (file: File) => {
-    const created = await api.createStyleTemplate(file);
-    const next = await api.listStyleTemplates();
-    setStyleTemplates(next);
-    setActiveStyleTemplateId(created.id);
-  };
-
-  const analyzeStyleTemplate = async (templateId: string) => {
-    await api.analyzeStyleTemplate(templateId);
-    const next = await api.listStyleTemplates();
-    setStyleTemplates(next);
-  };
-
-  const deleteStyleTemplate = async (templateId: string) => {
-    await api.deleteStyleTemplate(templateId);
-    const next = await api.listStyleTemplates();
-    setStyleTemplates(next);
-    if (activeStyleTemplateId === templateId) setActiveStyleTemplateId(null);
-  };
-
   const handleSelect = useCallback((ids: string[]) => setSelection(ids), [setSelection]);
 
   const handleElementsChange = useCallback((nextElements: typeof elements) => {
     if (!hasPreview) setElements(nextElements);
   }, [hasPreview, setElements]);
+
+  async function triggerAutoLayout(): Promise<boolean> {
+    if (!canvasRef.current || hasPreview || layouting) {
+      return false;
+    }
+    setLayouting(true);
+    try {
+      return await canvasRef.current.autoLayout();
+    } finally {
+      setLayouting(false);
+    }
+  }
 
   const defaultModel = useMemo(() => profiles.find((p) => p.isDefault) ?? profiles[0], [profiles]);
 
@@ -257,6 +237,13 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
           </button>
           <button className="ed-tool-btn" title="重做" disabled>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 10H8a4 4 0 000 8h9" /><path d="M21 10l-4-4M21 10l-4 4" /></svg>
+          </button>
+          <button className="ed-tool-btn" title="整理布局" onClick={() => void triggerAutoLayout()} disabled={layouting || hasPreview || elements.length === 0}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <rect x="3" y="4" width="7" height="7" rx="1" />
+              <rect x="14" y="13" width="7" height="7" rx="1" />
+              <path d="M10 8h4M14 8v5" />
+            </svg>
           </button>
           <div className="ed-divider" />
           <span className="ed-zoom-label">100%</span>
@@ -361,10 +348,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a4 4 0 014 4c0 1.1-.9 2-2 2h-4a2 2 0 01-2-2 4 4 0 014-4z" /><path d="M8 8v2a4 4 0 004 4h0a4 4 0 004-4V8" /><path d="M12 14v4M8 22h8" /></svg>
               AI
             </button>
-            <button className={`ed-sidebar-tab ${rightTab === "templates" ? "ed-sidebar-tab--active" : ""}`} onClick={() => setRightTab("templates")}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
-              模板
-            </button>
             <button className={`ed-sidebar-tab ${rightTab === "settings" ? "ed-sidebar-tab--active" : ""}`} onClick={() => setRightTab("settings")}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
               设置
@@ -388,18 +371,6 @@ export function EditorPage({ onBack, onDiagramUpdate }: EditorPageProps) {
                   />
                 </div>
               </>
-            )}
-
-            {rightTab === "templates" && (
-              <TemplateIconPanel
-                styleTemplates={styleTemplates}
-                activeStyleTemplateId={activeStyleTemplateId}
-                onSelectStyleTemplate={setActiveStyleTemplateId}
-                onUploadStyleTemplate={uploadStyleTemplate}
-                onAnalyzeStyleTemplate={analyzeStyleTemplate}
-                onDeleteStyleTemplate={deleteStyleTemplate}
-                styleTemplatePreviewUrl={api.styleTemplatePreviewUrl}
-              />
             )}
 
             {rightTab === "settings" && (

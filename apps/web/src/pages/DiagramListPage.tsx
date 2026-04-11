@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useState, useEffect } from "react";
 
 import { Icon as IconifyIcon } from "@iconify-icon/react";
-import { DEFAULT_RENDER_CONFIG } from "@ai-diagram-studio/shared";
 
-import { api, type StyleTemplateDto } from "../api/client";
+import { api } from "../api/client";
 import type { DiagramRecord } from "../types";
 
 type DiagramListPageProps = {
@@ -12,49 +11,12 @@ type DiagramListPageProps = {
   onCreateDiagram: (title: string) => Promise<void>;
 };
 
-function StylePreviewSvg({ renderConfig }: { renderConfig: NonNullable<StyleTemplateDto["renderConfig"]> }) {
-  const { groupColors, canvas } = renderConfig;
-  const colors = Object.values(groupColors).slice(0, 5);
-  return (
-    <svg viewBox="0 0 200 120" className="dlp-tpl-svg-preview" style={{ "--tpl-bg": canvas.background, "--tpl-edge": canvas.edgeColor } as React.CSSProperties}>
-      <rect width="200" height="120" fill="var(--tpl-bg)" />
-      {/* Group boxes */}
-      <rect x="8" y="8" width="80" height="50" rx="6" fill={colors[0]} opacity="0.4" stroke={colors[0]} strokeWidth="1" />
-      <rect x="100" y="8" width="92" height="30" rx="4" fill={colors[1]} opacity="0.35" stroke={colors[1]} strokeWidth="1" />
-      <rect x="100" y="46" width="92" height="30" rx="4" fill={colors[2]} opacity="0.35" stroke={colors[2]} strokeWidth="1" />
-      <rect x="8" y="66" width="55" height="46" rx="6" fill={colors[3]} opacity="0.4" stroke={colors[3]} strokeWidth="1" />
-      {/* Nodes */}
-      <rect x="18" y="18" width="30" height="16" rx="3" fill={colors[0]} />
-      <rect x="54" y="18" width="24" height="16" rx="3" fill={colors[0]} />
-      <rect x="110" y="16" width="36" height="12" rx="6" fill={colors[1]} />
-      <rect x="156" y="16" width="26" height="12" rx="6" fill={colors[1]} />
-      <rect x="110" y="54" width="30" height="12" rx="6" fill={colors[2]} />
-      <rect x="150" y="54" width="32" height="12" rx="6" fill={colors[2]} />
-      <ellipse cx="35" cy="89" rx="18" ry="10" fill={colors[3]} />
-      <polygon points="180,85 192,89 180,93 168,89" fill={colors[4]} />
-      {/* Edges */}
-      <line x1="48" y1="26" x2="54" y2="26" stroke="var(--tpl-edge)" strokeWidth="1.2" />
-      <line x1="78" y1="26" x2="90" y2="22" stroke="var(--tpl-edge)" strokeWidth="1.2" />
-      <line x1="138" y1="22" x2="156" y2="22" stroke="var(--tpl-edge)" strokeWidth="1.2" />
-      <line x1="125" y1="28" x2="125" y2="54" stroke="var(--tpl-edge)" strokeWidth="1.2" />
-      <line x1="140" y1="60" x2="150" y2="60" stroke="var(--tpl-edge)" strokeWidth="1.2" />
-      <line x1="63" y1="26" x2="80" y2="80" stroke="var(--tpl-edge)" strokeWidth="1.2" strokeDasharray="3,2" />
-    </svg>
-  );
-}
-
 export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: DiagramListPageProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [modelProfiles, setModelProfiles] = useState<Awaited<ReturnType<typeof api.listModelProfiles>>>([]);
   const [modelChecking, setModelChecking] = useState<Record<string, { status: "checking" | "ok" | "fail"; message: string }>>({});
-  const [styleTemplates, setStyleTemplates] = useState<StyleTemplateDto[]>([]);
-  const [activeStyleTemplateId, setActiveStyleTemplateId] = useState<string | null>(null);
-
-  useEffect(() => {
-    void api.listStyleTemplates().then(setStyleTemplates);
-  }, []);
 
   const formatRelative = useCallback((iso: string): string => {
     const diff = Date.now() - new Date(iso).getTime();
@@ -135,10 +97,6 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
             <IconifyIcon icon="solar:cpu-bold-duotone" className="dlp-nav-iconify dlp-nav-iconify--orange" />
             <span>模型中心</span>
           </a>
-          <a className="dlp-nav-link" href="#">
-            <IconifyIcon icon="solar:fire-bold-duotone" className="dlp-nav-iconify" />
-            <span>模板库</span>
-          </a>
         </nav>
 
         <div className="dlp-sidebar-footer">
@@ -158,7 +116,7 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
         <header className="dlp-header">
           <div className="dlp-search">
             <IconifyIcon icon="solar:magnifer-linear" className="dlp-search-iconify" />
-            <input placeholder="搜索图表、模板..." type="text" />
+            <input placeholder="搜索图表..." type="text" />
           </div>
           <div className="dlp-header-actions">
             <div className="dlp-status">
@@ -274,57 +232,6 @@ export function DiagramListPage({ diagrams, onOpenDiagram, onCreateDiagram }: Di
               <button className="dlp-btn-primary" onClick={() => setCreateOpen(true)}>
                 立即创建
               </button>
-            </div>
-          )}
-        </section>
-
-        {/* Templates */}
-        <section className="dlp-section dlp-templates-section">
-          <div className="dlp-section-head">
-            <h2><IconifyIcon icon="solar:star-fall-bold-duotone" width="20" className="dlp-section-icon--yellow" /> 预置风格模板</h2>
-          </div>
-          {styleTemplates.length > 0 ? (
-            <div className="dlp-template-grid">
-              {styleTemplates.map((tpl) => {
-                const renderConfig = tpl.renderConfig ?? DEFAULT_RENDER_CONFIG;
-                const colors = Object.values(renderConfig.groupColors).slice(0, 6);
-                const isActive = activeStyleTemplateId === tpl.id;
-                return (
-                  <div
-                    key={tpl.id}
-                    className={`dlp-template-card dlp-glass ${isActive ? "dlp-template-card--active" : ""}`}
-                    onClick={() => setActiveStyleTemplateId(isActive ? null : tpl.id)}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <div className="dlp-tpl-preview">
-                      {tpl.hasPreview ? (
-                        <img
-                          className="dlp-tpl-preview-img"
-                          src={api.styleTemplatePreviewUrl(tpl.id)}
-                          alt={tpl.name}
-                        />
-                      ) : (
-                        <StylePreviewSvg renderConfig={renderConfig} />
-                      )}
-                    </div>
-                    <div className="dlp-tpl-name-row">
-                      <span className="dlp-tpl-name">{tpl.name}</span>
-                      {tpl.isBuiltin && <span className="dlp-tpl-badge">内置</span>}
-                    </div>
-                    <div className="dlp-tpl-palette">
-                      {colors.map((c, i) => (
-                        <div key={i} className="dlp-tpl-color-dot" style={{ background: c }} />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="dlp-template-empty">
-              <IconifyIcon icon="solar:gallery-bold-duotone" width="32" className="dlp-template-empty-icon" />
-              <p>暂无风格模板</p>
             </div>
           )}
         </section>

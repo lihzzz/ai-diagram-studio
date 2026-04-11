@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { DEFAULT_RENDER_CONFIG, type RenderConfig } from "@ai-diagram-studio/shared";
+import { DEFAULT_RENDER_CONFIG } from "@ai-diagram-studio/shared";
 
 import type { DiagramElement, DiagramType } from "../types/domain.js";
 
@@ -27,14 +27,6 @@ type JobMeta = {
   modelProfileId?: string;
   previousReasoning?: Record<string, unknown>;
   existingElements?: DiagramElement[];
-  templateId?: string;
-};
-
-type TemplateInfo = {
-  id: string;
-  name: string;
-  stylePrompt: string | null;
-  renderConfig: RenderConfig;
 };
 
 type GroupFlatItem = {
@@ -61,6 +53,10 @@ type GraphValidationIssue = {
   code: string;
   message: string;
 };
+
+const SUPPORTED_GROUP_COLOR_KEYS = Object.keys(DEFAULT_RENDER_CONFIG.groupColors);
+const SUPPORTED_STEP_KINDS = [...DEFAULT_RENDER_CONFIG.stepKinds];
+const SUPPORTED_EDGE_STYLES = Object.keys(DEFAULT_RENDER_CONFIG.edgeStyles);
 
 async function ensureDirs(): Promise<void> {
   await fs.mkdir(config.uploadStorageDir, { recursive: true });
@@ -130,8 +126,7 @@ function parseJobMeta(raw: string | null): JobMeta {
     diagramType,
     modelProfileId: typeof parsed.modelProfileId === "string" ? parsed.modelProfileId : undefined,
     previousReasoning,
-    existingElements,
-    templateId: typeof parsed.templateId === "string" ? parsed.templateId : undefined
+    existingElements
   };
 }
 
@@ -178,6 +173,30 @@ function normalizeNodeKind(raw: unknown): GraphNodeKind {
     return "data";
   }
   return "process";
+}
+
+function normalizeGroupColor(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim();
+  if (!value || value.length > 40) {
+    return undefined;
+  }
+
+  if (SUPPORTED_GROUP_COLOR_KEYS.includes(value)) {
+    return value;
+  }
+
+  const hex = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+  const rgb = /^rgba?\(\s*(?:\d{1,3}%?\s*,\s*){2}\d{1,3}%?(?:\s*,\s*(?:0|0?\.\d+|1(?:\.0+)?))?\s*\)$/i;
+  const hsl = /^hsla?\(\s*\d{1,3}(?:\.\d+)?(?:deg)?\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%(?:\s*,\s*(?:0|0?\.\d+|1(?:\.0+)?))?\s*\)$/i;
+  const named = /^[a-zA-Z]{3,20}$/;
+
+  if (hex.test(value) || rgb.test(value) || hsl.test(value) || named.test(value)) {
+    return value;
+  }
+  return undefined;
 }
 
 function parseNodeRaw(raw: unknown, index: number): GraphNode | null {
@@ -229,7 +248,7 @@ function parseGroupRaw(raw: unknown, index: number): GraphGroup | null {
   return {
     id: groupId,
     title,
-    color: typeof record.color === "string" ? record.color : undefined,
+    color: normalizeGroupColor(record.color),
     nodes,
     children: children.length > 0 ? children : undefined
   };
@@ -494,11 +513,7 @@ function extractExistingDiagramSnapshot(elements: DiagramElement[]): {
   return { groups, nodes, edges };
 }
 
-function buildModelOutputJsonSchema(template: TemplateInfo): Record<string, unknown> {
-  const colorKeys = Object.keys(template.renderConfig.groupColors);
-  const stepKinds = template.renderConfig.stepKinds;
-  const edgeStyles = Object.keys(template.renderConfig.edgeStyles);
-
+function buildModelOutputJsonSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
@@ -522,7 +537,7 @@ function buildModelOutputJsonSchema(template: TemplateInfo): Record<string, unkn
             from: { type: "string", minLength: 1 },
             to: { type: "string", minLength: 1 },
             label: { type: "string" },
-            style: { type: "string", enum: edgeStyles }
+            style: { type: "string", enum: SUPPORTED_EDGE_STYLES }
           }
         }
       },
@@ -547,8 +562,8 @@ function buildModelOutputJsonSchema(template: TemplateInfo): Record<string, unkn
           id: { type: "string", minLength: 1 },
           title: { type: "string", minLength: 1 },
           subtitle: { type: "string" },
-          kind: { type: "string", enum: stepKinds },
-          style: { type: "string", enum: stepKinds }
+          kind: { type: "string", enum: SUPPORTED_STEP_KINDS },
+          style: { type: "string", enum: SUPPORTED_STEP_KINDS }
         }
       },
       group: {
@@ -558,7 +573,12 @@ function buildModelOutputJsonSchema(template: TemplateInfo): Record<string, unkn
         properties: {
           id: { type: "string", minLength: 1 },
           title: { type: "string", minLength: 1 },
-          color: { type: "string", enum: colorKeys },
+          color: {
+            type: "string",
+            minLength: 1,
+            maxLength: 40,
+            pattern: "^(#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\\([^\\n\\r]+\\)|hsla?\\([^\\n\\r]+\\)|[a-zA-Z]{3,20}|blue|green|yellow|red|purple|gray)$"
+          },
           nodes: { type: "array", items: { $ref: "#/$defs/node" } },
           children: { type: "array", items: { $ref: "#/$defs/group" } }
         }
@@ -663,17 +683,13 @@ function formatValidationIssues(issues: GraphValidationIssue[]): string {
   return issues.map((item, index) => `${index + 1}. [${item.level}] ${item.code}: ${item.message}`).join("\n");
 }
 
-function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string {
-  const colorKeys = Object.keys(template.renderConfig.groupColors);
-  const stepKinds = template.renderConfig.stepKinds;
-  const edgeStyles = Object.keys(template.renderConfig.edgeStyles);
-
+function systemPrompt(diagramType: DiagramType): string {
   return [
     "You are a senior diagram planner for a React Flow-based editor.",
     `Diagram type: ${diagramType}.`,
-    `Group color keys: ${colorKeys.join("|")}.`,
-    `Node kinds: ${stepKinds.join("|")}.`,
-    `Edge styles: ${edgeStyles.join("|")}.`,
+    "Group color should be model-selected and can be a CSS color string (hex/rgb/hsl/named color).",
+    `Node kinds: ${SUPPORTED_STEP_KINDS.join("|")}.`,
+    `Edge styles: ${SUPPORTED_EDGE_STYLES.join("|")}.`,
     "Output must be semantic graph JSON only (NOT React code, NOT markdown, NOT coordinates).",
     "Hard rules:",
     "1) Use stable, machine-friendly ids (lowercase, snake_case, no spaces).",
@@ -683,13 +699,12 @@ function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string 
     "5) Keep structure concise but practical; avoid single-node outputs.",
     "Return ONLY a JSON object with this shape:",
     "{",
-    '  "groups": [{"id":"string","title":"string","color":"one_of_group_color_keys","nodes":[{"id":"string","title":"string","subtitle":"optional","kind":"one_of_node_kinds","style":"one_of_node_kinds"}],"children":[...]}],',
+    '  "groups": [{"id":"string","title":"string","color":"css_color_string","nodes":[{"id":"string","title":"string","subtitle":"optional","kind":"one_of_node_kinds","style":"one_of_node_kinds"}],"children":[...]}],',
     '  "freeNodes": [{"id":"string","title":"string","subtitle":"optional","kind":"one_of_node_kinds","style":"one_of_node_kinds"}],',
     '  "edges": [{"from":"existing_node_id","to":"existing_node_id","label":"optional","style":"solid|dashed"}],',
     '  "reasoningSummary": {"layeringReason":"string","keyDependencies":["..."],"alternatives":["..."],"sources":["..."]}',
     "}",
     "Use groups when content naturally has phase/layer/module ownership.",
-    template.stylePrompt ? `Visual style guidance: ${template.stylePrompt}` : "",
     "Do not include markdown code fences."
   ]
     .filter(Boolean)
@@ -813,44 +828,6 @@ async function resolveModelProfile(job: {
   throw new Error("no_available_model_profile");
 }
 
-async function loadTemplateInfo(templateId?: string): Promise<TemplateInfo> {
-  const byId = templateId ? await prisma.template.findUnique({ where: { id: templateId } }) : null;
-  const defaultTemplate =
-    byId ??
-    (await prisma.template.findFirst({
-      where: { category: "style" },
-      orderBy: [{ isBuiltin: "desc" }, { createdAt: "desc" }]
-    }));
-
-  if (!defaultTemplate) {
-    return {
-      id: "default",
-      name: "default",
-      stylePrompt: null,
-      renderConfig: DEFAULT_RENDER_CONFIG
-    };
-  }
-
-  const parsed = safeJsonParse<unknown>(defaultTemplate.renderConfigJson, DEFAULT_RENDER_CONFIG);
-  const renderConfig =
-    parsed &&
-    typeof parsed === "object" &&
-    "groupColors" in parsed &&
-    "stepKinds" in parsed &&
-    "stepShapes" in parsed &&
-    "edgeStyles" in parsed &&
-    "canvas" in parsed
-      ? (parsed as RenderConfig)
-      : DEFAULT_RENDER_CONFIG;
-
-  return {
-    id: defaultTemplate.id,
-    name: defaultTemplate.name,
-    stylePrompt: defaultTemplate.stylePrompt,
-    renderConfig
-  };
-}
-
 async function buildFallbackResult(params: {
   inputText: string;
   diagramType: DiagramType;
@@ -903,11 +880,10 @@ async function runGenerationJob(jobId: string): Promise<void> {
       throw new Error("model_profile_api_key_missing");
     }
 
-    const template = await loadTemplateInfo(meta.templateId ?? job.templateId ?? undefined);
-    const outputSchema = buildModelOutputJsonSchema(template);
+    const outputSchema = buildModelOutputJsonSchema();
 
     const messages: Message[] = [
-      { role: "system", content: systemPrompt(meta.diagramType, template) },
+      { role: "system", content: systemPrompt(meta.diagramType) },
       {
         role: "user",
         content: userPromptForText({
@@ -957,7 +933,7 @@ async function runGenerationJob(jobId: string): Promise<void> {
     const hardIssues = validationIssues.filter((item) => item.level === "error");
     if (hardIssues.length > 0) {
       const repairMessages: Message[] = [
-        { role: "system", content: systemPrompt(meta.diagramType, template) },
+        { role: "system", content: systemPrompt(meta.diagramType) },
         {
           role: "user",
           content: repairPromptForInvalidGraph({

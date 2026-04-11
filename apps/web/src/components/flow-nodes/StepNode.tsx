@@ -2,14 +2,9 @@ import { Handle, Position } from "@xyflow/react";
 import { useRenderConfig } from "../../contexts/RenderConfigContext";
 
 function getShapeBorderRadius(kind: string): string {
-  if (kind === "start_end") return "50%";
-  if (kind === "decision") return "4px";
+  if (kind === "start_end") return "999px";
+  if (kind === "decision") return "0";
   return "8px";
-}
-
-function getShapeTransform(kind: string): string {
-  if (kind === "decision") return "rotate(45deg)";
-  return "";
 }
 
 export function StepNode({ data }: { data?: Record<string, unknown> }) {
@@ -21,14 +16,13 @@ export function StepNode({ data }: { data?: Record<string, unknown> }) {
   const innerContent = (
     <div
       style={{
-        width: isDiamond ? "70%" : "100%",
-        height: isDiamond ? "70%" : "100%",
+        width: "100%",
+        height: "100%",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        padding: isDiamond ? "4px" : "8px 12px",
-        transform: isDiamond ? "rotate(-45deg)" : undefined,
+        padding: isDiamond ? "10px 14px" : "8px 12px",
         overflow: "hidden"
       }}
     >
@@ -38,8 +32,7 @@ export function StepNode({ data }: { data?: Record<string, unknown> }) {
           fontWeight: 500,
           color: config.canvas.nodeBorderColor,
           textAlign: "center",
-          lineHeight: 1.3,
-          transform: isDiamond ? undefined : undefined
+          lineHeight: 1.3
         }}
       >
         {(data?.label as string) ?? ""}
@@ -62,8 +55,8 @@ export function StepNode({ data }: { data?: Record<string, unknown> }) {
   return (
     <div
       style={{
-        width: isDiamond ? "140%" : "100%",
-        height: isDiamond ? "140%" : "100%",
+        width: "100%",
+        height: "100%",
         display: "flex",
         alignItems: "center",
         justifyContent: "center"
@@ -81,15 +74,15 @@ export function StepNode({ data }: { data?: Record<string, unknown> }) {
           height: "100%",
           minWidth: 80,
           minHeight: 40,
-          transform: getShapeTransform(kind)
+          clipPath: isDiamond ? "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)" : undefined
         }}
       >
         {innerContent}
       </div>
-      <Handle type="target" position={Position.Top} />
-      <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Bottom} />
-      <Handle type="source" position={Position.Right} />
+      <Handle type="target" position={Position.Top} id="top" />
+      <Handle type="target" position={Position.Left} id="left" />
+      <Handle type="source" position={Position.Bottom} id="bottom" />
+      <Handle type="source" position={Position.Right} id="right" />
     </div>
   );
 }

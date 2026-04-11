@@ -52,7 +52,6 @@ export const createGenerationJobSchema = z.object({
   diagramId: z.string().optional(),
   previousReasoning: z.record(z.unknown()).optional(),
   existingElements: z.array(diagramElementSchema).optional(),
-  templateId: z.string().optional(),
   options: z.record(z.unknown()).optional(),
   modelProfileId: z.string().optional()
 });

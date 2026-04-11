@@ -1,10 +1,23 @@
 import { Handle, Position } from "@xyflow/react";
 import { useRenderConfig } from "../../contexts/RenderConfigContext";
 
+function resolveGroupColor(raw: string | undefined, fallback: string, palette: Record<string, string>): string {
+  if (!raw) {
+    return fallback;
+  }
+  if (palette[raw]) {
+    return palette[raw];
+  }
+  if (typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("color", raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
 export function GroupNode({ data }: { data?: Record<string, unknown> }) {
   const config = useRenderConfig();
   const colorKey = (data?.colorKey as string | undefined) ?? "blue";
-  const bgColor = config.groupColors[colorKey] ?? config.groupColors.blue;
+  const bgColor = resolveGroupColor(colorKey, config.groupColors.blue, config.groupColors);
   const title = (data?.title as string) ?? "";
 
   return (

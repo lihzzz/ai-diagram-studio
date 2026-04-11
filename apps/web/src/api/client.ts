@@ -1,5 +1,3 @@
-import type { RenderConfig } from "@ai-diagram-studio/shared";
-
 import type { DiagramElement, DiagramRecord, GenerationJobResult, GenerationJobSummary } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -38,16 +36,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return parseJsonSafe<T>(response);
 }
 
-export type StyleTemplateDto = {
-  id: string;
-  name: string;
-  isBuiltin: boolean;
-  stylePrompt: string | null;
-  renderConfig: RenderConfig;
-  hasPreview: boolean;
-  createdAt: string;
-};
-
 export const api = {
   listDiagrams: () => request<DiagramRecord[]>("/api/diagrams"),
   getDiagram: (id: string) => request<DiagramRecord>(`/api/diagrams/${id}`),
@@ -81,7 +69,6 @@ export const api = {
     diagramId?: string;
     previousReasoning?: Record<string, unknown>;
     existingElements?: DiagramElement[];
-    templateId?: string;
     modelProfileId?: string;
   }) =>
     request<{ jobId: string }>("/api/generation-jobs", {
@@ -96,27 +83,6 @@ export const api = {
     }),
   listDiagramJobs: (diagramId: string, page = 1, pageSize = 20) =>
     request<GenerationJobSummary[]>(`/api/diagrams/${diagramId}/generation-jobs?page=${page}&pageSize=${pageSize}`),
-  listStyleTemplates: () => request<StyleTemplateDto[]>("/api/style-templates"),
-  createStyleTemplate: async (file: File, name?: string) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    if (name?.trim()) {
-      formData.append("name", name.trim());
-    }
-    return request<StyleTemplateDto>("/api/style-templates", {
-      method: "POST",
-      body: formData
-    });
-  },
-  analyzeStyleTemplate: (id: string) =>
-    request<StyleTemplateDto>(`/api/style-templates/${id}/analyze`, {
-      method: "POST"
-    }),
-  deleteStyleTemplate: (id: string) =>
-    request<{ ok: boolean }>(`/api/style-templates/${id}`, {
-      method: "DELETE"
-    }),
-  styleTemplatePreviewUrl: (id: string) => `${API_BASE}/api/style-templates/${id}/preview`,
   listIcons: (q?: string) =>
     request<Array<{ id: string; name: string; category: string; source: string }>>(`/api/icons${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   listModelProfiles: () =>

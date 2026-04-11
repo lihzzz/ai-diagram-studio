@@ -447,7 +447,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       data: {
         id: jobId,
         diagramId: payload.diagramId ?? null,
-        templateId: payload.templateId ?? null,
+        templateId: null,
         jobType: "text_generate",
         status: "pending",
         inputText: payload.inputText ?? null,
@@ -458,8 +458,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
           options: payload.options ?? {},
           modelProfileId: modelProfile.id,
           previousReasoning: payload.previousReasoning ?? null,
-          existingElements: payload.existingElements ?? [],
-          templateId: payload.templateId ?? null
+          existingElements: payload.existingElements ?? []
         }),
         provider: modelProfile.provider,
         model: modelProfile.model

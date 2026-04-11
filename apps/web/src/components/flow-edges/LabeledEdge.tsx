@@ -1,4 +1,4 @@
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { useRenderConfig } from "../../contexts/RenderConfigContext";
 
 export function LabeledEdge({
@@ -14,13 +14,15 @@ export function LabeledEdge({
 }: EdgeProps) {
   const config = useRenderConfig();
   const edgeStyle = (data?.style as "solid" | "dashed" | undefined) ?? "solid";
-  const [edgePath, labelX, labelY] = getBezierPath({
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
     sourceY,
     sourcePosition,
     targetX,
     targetY,
-    targetPosition
+    targetPosition,
+    borderRadius: 12,
+    offset: 18
   });
 
   const strokeColor = config.canvas.edgeColor;

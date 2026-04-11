@@ -23,6 +23,7 @@ import type { DiagramElement } from "../types";
 import { downloadDataUrl, downloadText, elementsToJson } from "../utils/export-canvas";
 import { fromReactFlowElements, toReactFlowElements, type ReactFlowEdge, type ReactFlowNode } from "../utils/reactflow-adapter";
 import { RenderConfigProvider } from "../contexts/RenderConfigContext";
+import { useAutoLayout } from "../hooks/useAutoLayout";
 import { GroupNode } from "./flow-nodes/GroupNode";
 import { StepNode } from "./flow-nodes/StepNode";
 import { LabeledEdge } from "./flow-edges/LabeledEdge";
@@ -43,6 +44,7 @@ export type DiagramCanvasHandle = {
     bounds: { x: number; y: number; width: number; height: number };
     viewport: { x: number; y: number; zoom: number };
   };
+  autoLayout: () => Promise<boolean>;
 };
 
 const nodeTypes = {
@@ -80,6 +82,7 @@ function CanvasBody({
   exposeHandle
 }: CanvasBodyProps) {
   const flow = useReactFlow();
+  const { autoLayout } = useAutoLayout();
   const [nodes, setNodes] = useState<ReactFlowNode[]>([]);
   const [edges, setEdges] = useState<ReactFlowEdge[]>([]);
   const syncingRef = useRef(false);
@@ -161,9 +164,35 @@ function CanvasBody({
     return { bounds, viewport };
   };
 
+  const runAutoLayout = useCallback(async () => {
+    if (readOnly) return false;
+    const currentNodes = nodesRef.current;
+    const currentEdges = edgesRef.current;
+    if (currentNodes.length === 0) return false;
+
+    const layouted = await autoLayout(currentNodes, currentEdges, {
+      direction: "RIGHT",
+      nodeSpacing: 92,
+      layerSpacing: 136
+    });
+    if (!layouted) return false;
+
+    nodesRef.current = layouted.nodes;
+    edgesRef.current = layouted.edges;
+    setNodes(layouted.nodes);
+    setEdges(layouted.edges);
+    emitElements(layouted.nodes, layouted.edges);
+
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(undefined));
+    });
+    await flow.fitView({ duration: 220, padding: 0.2 });
+    return true;
+  }, [autoLayout, emitElements, flow, readOnly]);
+
   useEffect(() => {
-    exposeHandle({ getExportOptions });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    exposeHandle({ getExportOptions, autoLayout: runAutoLayout });
+  }, [exposeHandle, runAutoLayout]);
 
   const exportImage = async (format: "png" | "svg") => {
     const pane = hostRef.current?.querySelector(".react-flow__viewport") as HTMLElement | null;
@@ -258,7 +287,8 @@ export const DiagramCanvas = forwardRef<DiagramCanvasHandle, DiagramCanvasProps>
     getExportOptions: () => ({
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       viewport: { x: 0, y: 0, zoom: 1 }
-    })
+    }),
+    autoLayout: async () => false
   });
 
   useImperativeHandle(ref, () => handleRef.current, []);
