@@ -3,15 +3,13 @@ import { DEFAULT_RENDER_CONFIG, MINIMAL_LIGHT_RENDER_CONFIG } from "@ai-diagram-
 
 const prisma = new PrismaClient();
 
-const builtinTemplates = [
+const builtinStyleTemplates = [
   {
     id: "tpl_default_style",
     name: "默认风格",
     category: "style",
     diagramType: "flowchart",
-    templateJson: {
-      version: 1
-    },
+    templateJson: { version: 1 },
     stylePrompt: "Use a clean modern style with balanced spacing, clear hierarchy, and readable labels.",
     renderConfigJson: DEFAULT_RENDER_CONFIG
   },
@@ -20,73 +18,9 @@ const builtinTemplates = [
     name: "极简浅色",
     category: "style",
     diagramType: "flowchart",
-    templateJson: {
-      version: 1
-    },
+    templateJson: { version: 1 },
     stylePrompt: "Apple-style minimal design: light gray (#F8F8F8) background, soft rounded corners, muted gray (#B0B0B0) edges, subtle grid, low contrast, clean and airy like macOS document icons.",
     renderConfigJson: MINIMAL_LIGHT_RENDER_CONFIG
-  },
-  {
-    id: "tpl_three_layer",
-    name: "通用三层架构",
-    category: "architecture",
-    diagramType: "module_architecture",
-    templateJson: {
-      elements: [
-        { id: "n1", type: "rectangle", x: 120, y: 80, width: 240, height: 90, text: "接入层" },
-        { id: "n2", type: "rectangle", x: 120, y: 220, width: 240, height: 90, text: "服务层" },
-        { id: "n3", type: "rectangle", x: 120, y: 360, width: 240, height: 90, text: "数据层" },
-        {
-          id: "e1",
-          type: "arrow",
-          x: 200,
-          y: 140,
-          text: "n1->n2",
-          meta: { fromId: "n1", toId: "n2" }
-        },
-        {
-          id: "e2",
-          type: "arrow",
-          x: 200,
-          y: 280,
-          text: "n2->n3",
-          meta: { fromId: "n2", toId: "n3" }
-        }
-      ]
-    },
-    stylePrompt: null,
-    renderConfigJson: null
-  },
-  {
-    id: "tpl_order_flow",
-    name: "标准订单流程",
-    category: "flow",
-    diagramType: "flowchart",
-    templateJson: {
-      elements: [
-        { id: "f1", type: "rectangle", x: 80, y: 100, width: 180, height: 80, text: "创建订单" },
-        { id: "f2", type: "rectangle", x: 360, y: 100, width: 180, height: 80, text: "支付" },
-        { id: "f3", type: "rectangle", x: 640, y: 100, width: 180, height: 80, text: "履约发货" },
-        {
-          id: "fe1",
-          type: "arrow",
-          x: 200,
-          y: 140,
-          text: "f1->f2",
-          meta: { fromId: "f1", toId: "f2" }
-        },
-        {
-          id: "fe2",
-          type: "arrow",
-          x: 500,
-          y: 140,
-          text: "f2->f3",
-          meta: { fromId: "f2", toId: "f3" }
-        }
-      ]
-    },
-    stylePrompt: null,
-    renderConfigJson: null
   }
 ];
 
@@ -98,7 +32,7 @@ const builtinIcons = [
 ];
 
 async function main(): Promise<void> {
-  for (const template of builtinTemplates) {
+  for (const template of builtinStyleTemplates) {
     await prisma.template.upsert({
       where: { id: template.id },
       update: {

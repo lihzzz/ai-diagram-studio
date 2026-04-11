@@ -39,8 +39,8 @@ export function App() {
     }
   };
 
-  const createDiagram = async (title: string, type: "flowchart" | "module_architecture") => {
-    const created = await api.createDiagram({ title, type });
+  const createDiagram = async (title: string) => {
+    const created = await api.createDiagram({ title, type: "flowchart" });
     await loadDiagrams();
     setDiagram(created);
     setPage("editor");

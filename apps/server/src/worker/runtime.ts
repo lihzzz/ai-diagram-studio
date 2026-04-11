@@ -44,6 +44,24 @@ type GroupFlatItem = {
   parentId?: string;
 };
 
+type GraphParseStats = {
+  inputEdgeCount: number;
+  resolvedEdgeCount: number;
+  droppedEdgeCount: number;
+  autoLinked: boolean;
+};
+
+type GraphParseResult = {
+  graph: GraphPayload;
+  stats: GraphParseStats;
+};
+
+type GraphValidationIssue = {
+  level: "error" | "warning";
+  code: string;
+  message: string;
+};
+
 async function ensureDirs(): Promise<void> {
   await fs.mkdir(config.uploadStorageDir, { recursive: true });
   await fs.mkdir(config.exportOutputDir, { recursive: true });
@@ -51,6 +69,39 @@ async function ensureDirs(): Promise<void> {
 
 function cleanControlChars(value: string): string {
   return value.replace(/[\x00-\x1f]/g, " ").trim();
+}
+
+function truncateLogText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const remain = text.length - maxChars;
+  return `${text.slice(0, maxChars)}\n... <truncated ${remain} chars>`;
+}
+
+function logModelPrompt(params: {
+  jobId: string;
+  phase: "generate" | "repair";
+  provider: string;
+  model: string;
+  diagramType: DiagramType;
+  messages: Message[];
+}): void {
+  if (!config.aiLogPrompts) {
+    return;
+  }
+  const header = [
+    `[ai.request.prompt]`,
+    `jobId=${params.jobId}`,
+    `phase=${params.phase}`,
+    `provider=${params.provider}`,
+    `model=${params.model}`,
+    `diagramType=${params.diagramType}`
+  ].join(" ");
+  const serialized = JSON.stringify(params.messages, null, 2);
+  const body = truncateLogText(serialized, Math.max(1000, config.aiPromptLogMaxChars));
+  console.info(header);
+  console.info(body);
 }
 
 function parseJobMeta(raw: string | null): JobMeta {
@@ -196,7 +247,7 @@ function collectNodes(groups: GraphGroup[], freeNodes: GraphNode[]): GraphNode[]
   return all;
 }
 
-function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
+function toGraphPayload(payload: Record<string, unknown>): GraphParseResult {
   const groups = (Array.isArray(payload.groups) ? payload.groups : [])
     .map((group, index) => parseGroupRaw(group, index))
     .filter((item): item is GraphGroup => item !== null);
@@ -274,13 +325,16 @@ function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
     })
     .filter((item): item is GraphEdge => item !== null);
 
+  const resolvedEdgeCount = edges.length;
+  let autoLinked = false;
   if (edges.length === 0 && nodes.length > 1) {
+    autoLinked = true;
     for (let index = 0; index < nodes.length - 1; index += 1) {
       edges.push({ from: nodes[index].id, to: nodes[index + 1].id, style: "solid" });
     }
   }
 
-  return {
+  const graph: GraphPayload = {
     groups,
     freeNodes,
     edges,
@@ -288,6 +342,16 @@ function toGraphPayload(payload: Record<string, unknown>): GraphPayload {
       payload.reasoningSummary && typeof payload.reasoningSummary === "object"
         ? (payload.reasoningSummary as Record<string, unknown>)
         : undefined
+  };
+
+  return {
+    graph,
+    stats: {
+      inputEdgeCount: edgesRaw.length,
+      resolvedEdgeCount,
+      droppedEdgeCount: Math.max(0, edgesRaw.length - resolvedEdgeCount),
+      autoLinked
+    }
   };
 }
 
@@ -384,21 +448,219 @@ async function graphToElements(graph: GraphPayload, diagramType: DiagramType): P
   return elements;
 }
 
-function summarizeElements(elements: DiagramElement[]): string {
-  const nodes = elements
-    .filter((item) => item.type !== "arrow")
-    .map((item) => `${item.id}[${item.type}]:${item.text ?? ""}`)
-    .join("\n");
-  const edges = elements
-    .filter((item) => item.type === "arrow")
-    .map((item) => {
-      const from = item.meta?.fromId ?? "?";
-      const to = item.meta?.toId ?? "?";
-      const label = typeof item.meta?.label === "string" && item.meta.label.trim() ? `:${item.meta.label.trim()}` : "";
-      return `${from}->${to}${label}`;
-    })
-    .join("\n");
-  return `Nodes:\n${nodes || "(none)"}\nEdges:\n${edges || "(none)"}`;
+function extractExistingDiagramSnapshot(elements: DiagramElement[]): {
+  groups: Array<{ id: string; title: string; color?: string; parentId?: string }>;
+  nodes: Array<{ id: string; title: string; kind: string; style?: string; parentId?: string }>;
+  edges: Array<{ from: string; to: string; label?: string; style?: string }>;
+} {
+  const groups: Array<{ id: string; title: string; color?: string; parentId?: string }> = [];
+  const nodes: Array<{ id: string; title: string; kind: string; style?: string; parentId?: string }> = [];
+  const edges: Array<{ from: string; to: string; label?: string; style?: string }> = [];
+
+  for (const item of elements) {
+    if (item.type === "group") {
+      groups.push({
+        id: item.id,
+        title: item.text ?? "",
+        color: typeof item.meta?.colorKey === "string" ? item.meta.colorKey : item.style,
+        parentId: item.parentId
+      });
+      continue;
+    }
+
+    if (item.type === "arrow") {
+      const from = typeof item.meta?.fromId === "string" ? item.meta.fromId : "";
+      const to = typeof item.meta?.toId === "string" ? item.meta.toId : "";
+      if (from && to) {
+        edges.push({
+          from,
+          to,
+          label: typeof item.meta?.label === "string" ? item.meta.label : undefined,
+          style: typeof item.meta?.style === "string" ? item.meta.style : item.style
+        });
+      }
+      continue;
+    }
+
+    nodes.push({
+      id: item.id,
+      title: item.text ?? "",
+      kind: typeof item.meta?.kind === "string" ? item.meta.kind : item.style ?? "process",
+      style: item.style,
+      parentId: item.parentId
+    });
+  }
+
+  return { groups, nodes, edges };
+}
+
+function buildModelOutputJsonSchema(template: TemplateInfo): Record<string, unknown> {
+  const colorKeys = Object.keys(template.renderConfig.groupColors);
+  const stepKinds = template.renderConfig.stepKinds;
+  const edgeStyles = Object.keys(template.renderConfig.edgeStyles);
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["groups", "freeNodes", "edges", "reasoningSummary"],
+    properties: {
+      groups: {
+        type: "array",
+        items: { $ref: "#/$defs/group" }
+      },
+      freeNodes: {
+        type: "array",
+        items: { $ref: "#/$defs/node" }
+      },
+      edges: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["from", "to"],
+          properties: {
+            from: { type: "string", minLength: 1 },
+            to: { type: "string", minLength: 1 },
+            label: { type: "string" },
+            style: { type: "string", enum: edgeStyles }
+          }
+        }
+      },
+      reasoningSummary: {
+        type: "object",
+        additionalProperties: true,
+        required: ["layeringReason", "keyDependencies", "alternatives", "sources"],
+        properties: {
+          layeringReason: { type: "string", minLength: 1 },
+          keyDependencies: { type: "array", items: { type: "string" } },
+          alternatives: { type: "array", items: { type: "string" } },
+          sources: { type: "array", items: { type: "string" } }
+        }
+      }
+    },
+    $defs: {
+      node: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "title", "kind"],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          title: { type: "string", minLength: 1 },
+          subtitle: { type: "string" },
+          kind: { type: "string", enum: stepKinds },
+          style: { type: "string", enum: stepKinds }
+        }
+      },
+      group: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "title", "nodes"],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          title: { type: "string", minLength: 1 },
+          color: { type: "string", enum: colorKeys },
+          nodes: { type: "array", items: { $ref: "#/$defs/node" } },
+          children: { type: "array", items: { $ref: "#/$defs/group" } }
+        }
+      }
+    }
+  };
+}
+
+function validateGraphPayload(graph: GraphPayload, params: { diagramType: DiagramType; stats: GraphParseStats }): GraphValidationIssue[] {
+  const issues: GraphValidationIssue[] = [];
+  const nodes = collectNodes(graph.groups, graph.freeNodes);
+
+  if (nodes.length === 0) {
+    issues.push({
+      level: "error",
+      code: "empty_nodes",
+      message: "No valid nodes were generated."
+    });
+  }
+
+  const nodeIdCount = new Map<string, number>();
+  for (const node of nodes) {
+    nodeIdCount.set(node.id, (nodeIdCount.get(node.id) ?? 0) + 1);
+  }
+  const duplicatedIds = Array.from(nodeIdCount.entries())
+    .filter(([, count]) => count > 1)
+    .map(([id]) => id);
+  if (duplicatedIds.length > 0) {
+    issues.push({
+      level: "error",
+      code: "duplicate_node_ids",
+      message: `Duplicated node ids: ${duplicatedIds.join(", ")}`
+    });
+  }
+
+  if (nodes.length > 1 && graph.edges.length === 0) {
+    issues.push({
+      level: "error",
+      code: "no_edges",
+      message: "There are multiple nodes but no valid edges."
+    });
+  }
+
+  if (params.stats.droppedEdgeCount > 0) {
+    issues.push({
+      level: params.stats.inputEdgeCount > 0 && params.stats.resolvedEdgeCount === 0 ? "error" : "warning",
+      code: "unresolved_edges",
+      message: `${params.stats.droppedEdgeCount} edge(s) were dropped because from/to could not be resolved to node ids.`
+    });
+  }
+
+  if (params.stats.autoLinked) {
+    issues.push({
+      level: "warning",
+      code: "auto_linked",
+      message: "Model returned no valid edges; fallback sequential edges were auto-generated."
+    });
+  }
+
+  if (params.diagramType === "flowchart") {
+    if (nodes.length < 3) {
+      issues.push({
+        level: "warning",
+        code: "too_few_nodes",
+        message: "Flowchart usually needs at least 3 nodes for practical value."
+      });
+    }
+
+    if (!nodes.some((node) => node.kind === "start_end")) {
+      issues.push({
+        level: "warning",
+        code: "missing_start_end",
+        message: "Flowchart should include at least one start/end node."
+      });
+    }
+
+    const outDegree = new Map<string, number>();
+    for (const edge of graph.edges) {
+      outDegree.set(edge.from, (outDegree.get(edge.from) ?? 0) + 1);
+    }
+
+    const weakDecisionNodes = nodes
+      .filter((node) => node.kind === "decision")
+      .filter((node) => (outDegree.get(node.id) ?? 0) < 2)
+      .map((node) => node.id);
+    if (weakDecisionNodes.length > 0) {
+      issues.push({
+        level: "warning",
+        code: "decision_branching",
+        message: `Decision nodes should have at least two outgoing branches: ${weakDecisionNodes.join(", ")}`
+      });
+    }
+  }
+
+  return issues;
+}
+
+function formatValidationIssues(issues: GraphValidationIssue[]): string {
+  if (issues.length === 0) {
+    return "(none)";
+  }
+  return issues.map((item, index) => `${index + 1}. [${item.level}] ${item.code}: ${item.message}`).join("\n");
 }
 
 function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string {
@@ -407,19 +669,26 @@ function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string 
   const edgeStyles = Object.keys(template.renderConfig.edgeStyles);
 
   return [
-    "You are a senior diagram planner.",
+    "You are a senior diagram planner for a React Flow-based editor.",
     `Diagram type: ${diagramType}.`,
     `Group color keys: ${colorKeys.join("|")}.`,
     `Node kinds: ${stepKinds.join("|")}.`,
     `Edge styles: ${edgeStyles.join("|")}.`,
-    "Return ONLY a JSON object with this schema:",
+    "Output must be semantic graph JSON only (NOT React code, NOT markdown, NOT coordinates).",
+    "Hard rules:",
+    "1) Use stable, machine-friendly ids (lowercase, snake_case, no spaces).",
+    "2) Every edge.from and edge.to must reference existing node ids.",
+    "3) Reuse existing ids when editing an existing diagram unless replacement is necessary.",
+    "4) For flowchart: include start/end semantics and keep decision branches explicit.",
+    "5) Keep structure concise but practical; avoid single-node outputs.",
+    "Return ONLY a JSON object with this shape:",
     "{",
-    '  "groups": [{"id":"string","title":"string","color":"string","nodes":[{"id":"string","title":"string","subtitle":"optional","kind":"string","style":"string"}],"children":[]}],',
-    '  "freeNodes": [{"id":"string","title":"string","subtitle":"optional","kind":"string","style":"string"}],',
-    '  "edges": [{"from":"nodeId","to":"nodeId","label":"optional","style":"solid|dashed"}],',
+    '  "groups": [{"id":"string","title":"string","color":"one_of_group_color_keys","nodes":[{"id":"string","title":"string","subtitle":"optional","kind":"one_of_node_kinds","style":"one_of_node_kinds"}],"children":[...]}],',
+    '  "freeNodes": [{"id":"string","title":"string","subtitle":"optional","kind":"one_of_node_kinds","style":"one_of_node_kinds"}],',
+    '  "edges": [{"from":"existing_node_id","to":"existing_node_id","label":"optional","style":"solid|dashed"}],',
     '  "reasoningSummary": {"layeringReason":"string","keyDependencies":["..."],"alternatives":["..."],"sources":["..."]}',
     "}",
-    "Use groups when the content naturally has module/phase ownership.",
+    "Use groups when content naturally has phase/layer/module ownership.",
     template.stylePrompt ? `Visual style guidance: ${template.stylePrompt}` : "",
     "Do not include markdown code fences."
   ]
@@ -429,13 +698,15 @@ function systemPrompt(diagramType: DiagramType, template: TemplateInfo): string 
 
 function userPromptForText(params: {
   inputText: string;
+  diagramType: DiagramType;
   previousReasoning?: Record<string, unknown>;
   existingElements?: DiagramElement[];
 }): string {
   const parts = [
-    "Generate a practical diagram from this requirement:",
+    "Generate a practical, implementation-ready graph from this requirement:",
     params.inputText,
-    "Need enough steps/modules to be useful. Avoid single-node output."
+    "Need enough steps/modules to be useful. Avoid single-node output.",
+    `Target diagram type: ${params.diagramType}.`
   ];
 
   if (params.previousReasoning) {
@@ -444,9 +715,43 @@ function userPromptForText(params: {
   }
 
   if (params.existingElements && params.existingElements.length > 0) {
-    parts.push("Current diagram (for incremental optimization):");
-    parts.push(summarizeElements(params.existingElements));
-    parts.push("Preserve stable structure and only change necessary parts.");
+    parts.push("Current diagram structured context (for incremental optimization):");
+    parts.push(JSON.stringify(extractExistingDiagramSnapshot(params.existingElements)));
+    parts.push("Editing rules: preserve stable ids/structure and only change necessary parts.");
+  }
+
+  return parts.join("\n");
+}
+
+function repairPromptForInvalidGraph(params: {
+  inputText: string;
+  diagramType: DiagramType;
+  invalidOutput: Record<string, unknown>;
+  issues: GraphValidationIssue[];
+  previousReasoning?: Record<string, unknown>;
+  existingElements?: DiagramElement[];
+}): string {
+  const parts = [
+    "The previous JSON output is invalid for the graph editor constraints.",
+    `Target diagram type: ${params.diagramType}.`,
+    "Please FIX the JSON and return a complete corrected JSON object only.",
+    "Validation issues:",
+    formatValidationIssues(params.issues),
+    "Previous invalid JSON:",
+    JSON.stringify(params.invalidOutput),
+    "Original requirement:",
+    params.inputText
+  ];
+
+  if (params.previousReasoning) {
+    parts.push("Previous reasoning summary:");
+    parts.push(JSON.stringify(params.previousReasoning));
+  }
+
+  if (params.existingElements && params.existingElements.length > 0) {
+    parts.push("Current diagram structured context:");
+    parts.push(JSON.stringify(extractExistingDiagramSnapshot(params.existingElements)));
+    parts.push("Keep existing IDs and structure stable when possible.");
   }
 
   return parts.join("\n");
@@ -599,6 +904,7 @@ async function runGenerationJob(jobId: string): Promise<void> {
     }
 
     const template = await loadTemplateInfo(meta.templateId ?? job.templateId ?? undefined);
+    const outputSchema = buildModelOutputJsonSchema(template);
 
     const messages: Message[] = [
       { role: "system", content: systemPrompt(meta.diagramType, template) },
@@ -606,11 +912,20 @@ async function runGenerationJob(jobId: string): Promise<void> {
         role: "user",
         content: userPromptForText({
           inputText: job.inputText ?? "",
+          diagramType: meta.diagramType,
           previousReasoning: meta.previousReasoning,
           existingElements: meta.existingElements
         })
       }
     ];
+    logModelPrompt({
+      jobId: job.id,
+      phase: "generate",
+      provider: profile.provider,
+      model: profile.model,
+      diagramType: meta.diagramType,
+      messages
+    });
 
     const modelJson = await requestJsonFromModel({
       profile: {
@@ -622,11 +937,83 @@ async function runGenerationJob(jobId: string): Promise<void> {
       messages,
       temperature: config.aiTemperature,
       maxTokens: config.aiMaxTokens,
-      timeoutMs: config.aiTimeoutMs
+      timeoutMs: config.aiTimeoutMs,
+      jsonSchema: {
+        name: "diagram_graph_payload",
+        schema: outputSchema,
+        strict: true
+      },
+      debugTag: `${job.id}:generate`
     });
 
-    const graph = toGraphPayload(modelJson);
+    let graphParse = toGraphPayload(modelJson);
+    let graph = graphParse.graph;
+    let validationIssues = validateGraphPayload(graph, {
+      diagramType: meta.diagramType,
+      stats: graphParse.stats
+    });
+    let repairApplied = false;
+
+    const hardIssues = validationIssues.filter((item) => item.level === "error");
+    if (hardIssues.length > 0) {
+      const repairMessages: Message[] = [
+        { role: "system", content: systemPrompt(meta.diagramType, template) },
+        {
+          role: "user",
+          content: repairPromptForInvalidGraph({
+            inputText: job.inputText ?? "",
+            diagramType: meta.diagramType,
+            invalidOutput: modelJson,
+            issues: hardIssues,
+            previousReasoning: meta.previousReasoning,
+            existingElements: meta.existingElements
+          })
+        }
+      ];
+      logModelPrompt({
+        jobId: job.id,
+        phase: "repair",
+        provider: profile.provider,
+        model: profile.model,
+        diagramType: meta.diagramType,
+        messages: repairMessages
+      });
+
+      const repairedJson = await requestJsonFromModel({
+        profile: {
+          provider: profile.provider,
+          model: profile.model,
+          apiBase: profile.apiBase,
+          apiKey: profile.apiKey
+        },
+        messages: repairMessages,
+        temperature: Math.min(config.aiTemperature, 0.1),
+        maxTokens: config.aiMaxTokens,
+        timeoutMs: config.aiTimeoutMs,
+        jsonSchema: {
+          name: "diagram_graph_payload",
+          schema: outputSchema,
+          strict: true
+        },
+        debugTag: `${job.id}:repair`
+      });
+
+      graphParse = toGraphPayload(repairedJson);
+      graph = graphParse.graph;
+      validationIssues = validateGraphPayload(graph, {
+        diagramType: meta.diagramType,
+        stats: graphParse.stats
+      });
+      repairApplied = true;
+
+      const repairHardIssues = validationIssues.filter((item) => item.level === "error");
+      if (repairHardIssues.length > 0) {
+        throw new Error(`model_output_invalid:${formatValidationIssues(repairHardIssues)}`);
+      }
+    }
+
     const elements = await graphToElements(graph, meta.diagramType);
+    const warnings = validationIssues.filter((item) => item.level === "warning");
     const reasoning = {
       ...fallbackReasoningSummary({
         inputType: "text",
@@ -634,7 +1021,9 @@ async function runGenerationJob(jobId: string): Promise<void> {
         sourceRefs: ["text_input"],
         modelReasoning: graph.reasoningSummary
       }),
-      fallback: false
+      fallback: false,
+      modelRepairApplied: repairApplied,
+      validationWarnings: warnings.map((item) => item.message)
     };
 
     await prisma.generationJob.update({

@@ -117,13 +117,6 @@ export const api = {
       method: "DELETE"
     }),
   styleTemplatePreviewUrl: (id: string) => `${API_BASE}/api/style-templates/${id}/preview`,
-  listTemplates: () =>
-    request<Array<{ id: string; name: string; category: string; diagramType: string; isBuiltin: boolean }>>("/api/templates"),
-  applyTemplate: (id: string, diagramId: string) =>
-    request<{ ok: boolean; diagramId: string; newVersion: number }>(`/api/templates/${id}/apply`, {
-      method: "POST",
-      body: JSON.stringify({ diagramId })
-    }),
   listIcons: (q?: string) =>
     request<Array<{ id: string; name: string; category: string; source: string }>>(`/api/icons${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   listModelProfiles: () =>

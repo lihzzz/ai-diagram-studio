@@ -622,58 +622,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  app.get("/api/templates", async (request) => {
-    const query = request.query as { category?: string; diagramType?: string };
-    const templates = await prisma.template.findMany({
-      where: {
-        category: query.category,
-        diagramType: query.diagramType
-      },
-      orderBy: { createdAt: "desc" }
-    });
-    return templates.map((item) => ({
-      id: item.id,
-      name: item.name,
-      category: item.category,
-      diagramType: item.diagramType,
-      isBuiltin: item.isBuiltin
-    }));
-  });
-
-  app.get<{ Params: { id: string } }>("/api/templates/:id", async (request) => {
-    const template = await prisma.template.findUnique({ where: { id: request.params.id } });
-    enforce(template, 404, "template not found");
-    return {
-      id: template.id,
-      name: template.name,
-      category: template.category,
-      diagramType: template.diagramType,
-      template: safeJsonParse<Record<string, unknown>>(template.templateJson, {})
-    };
-  });
-
-  app.post<{ Params: { id: string } }>("/api/templates/:id/apply", async (request) => {
-    const body = request.body as { diagramId?: string };
-    enforce(body?.diagramId, 400, "diagramId is required");
-
-    const template = await prisma.template.findUnique({ where: { id: request.params.id } });
-    enforce(template, 404, "template not found");
-
-    const diagram = await prisma.diagram.findUnique({ where: { id: body.diagramId } });
-    enforce(diagram, 404, "diagram not found");
-
-    const templateJson = safeJsonParse<{ elements?: DiagramElement[] }>(template.templateJson, {});
-    const elements = templateJson.elements ?? [];
-    await prisma.diagram.update({
-      where: { id: diagram.id },
-      data: {
-        elementsJson: asJsonString(elements)
-      }
-    });
-
-    return { ok: true, diagramId: diagram.id, newVersion: diagram.currentVersion };
-  });
-
   app.get("/api/icons", async (request) => {
     const query = request.query as { category?: string; q?: string };
     const icons = await prisma.icon.findMany({
